@@ -7,6 +7,10 @@ import Config
 # watchers to your application. For example, we use it
 # with webpack to recompile .js and .css sources.
 
+
+# Pulsechain addition to support live loading in development
+config :block_scout_web, :environment, :dev
+
 config :block_scout_web, BlockScoutWeb.Endpoint,
   debug_errors: true,
   code_reloader: true,

@@ -2,6 +2,9 @@ defmodule BlockScoutWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :block_scout_web
   use Absinthe.Phoenix.Endpoint
 
+  # Pulsechain addition to support live loading in development
+  in_prod = Application.get_env(:block_scout_web, :environment) == :prod
+
   if Application.compile_env(:block_scout_web, :sql_sandbox) do
     plug(Phoenix.Ecto.SQL.Sandbox, repo: Explorer.Repo)
   end
@@ -17,7 +20,7 @@ defmodule BlockScoutWeb.Endpoint do
     Plug.Static,
     at: "/",
     from: :block_scout_web,
-    gzip: true,
+    gzip: in_prod,
     only: ~w(
       css
       fonts

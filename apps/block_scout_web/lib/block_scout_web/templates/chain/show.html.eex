@@ -206,7 +206,6 @@
     </div>
   </div>
 
-  <%= render BlockScoutWeb.Advertisement.BannersAdView, "_banner_728.html", conn: @conn %>
 
   <div class="card card-chain-transactions">
     <div class="card-body">

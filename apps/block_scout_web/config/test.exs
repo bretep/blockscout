@@ -1,5 +1,8 @@
 import Config
 
+# Pulsechain addition to support live loading in development
+config :block_scout_web, :environment, :test
+
 config :block_scout_web, :sql_sandbox, true
 
 # We don't run a server during test. If one is required,

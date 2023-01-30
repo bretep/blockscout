@@ -53,7 +53,7 @@ defmodule Explorer.ExchangeRates.Source do
   @doc """
   Callback for api's to format the data returned by their query.
   """
-  @callback format_data(String.t()) :: [any]
+  @callback format_data(map()) :: [any]
 
   @doc """
   Url for the api to query to get the market info.

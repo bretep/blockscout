@@ -74,7 +74,7 @@ config :explorer, Explorer.Chain.Cache.NewVerifiedContractsCounter,
   enable_consolidation: true,
   update_interval_in_seconds: 30 * 60
 
-config :explorer, Explorer.Chain.Cache.TokenExchangeRate,
+config :explorer, Explorer.ExchangeRates.TokenExchangeRates,
   enabled: true,
   enable_consolidation: true
 

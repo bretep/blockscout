@@ -48,7 +48,7 @@ defmodule Explorer.ExchangeRates.Source.CoinGecko do
 
   @impl Source
   def source_url do
-    explicit_coin_id = Application.get_env(:explorer, ExchangeRates)[:coingecko_coin_id]
+    explicit_coin_id = config(:coin_id)
 
     {:ok, id} =
       if explicit_coin_id do
@@ -71,7 +71,7 @@ defmodule Explorer.ExchangeRates.Source.CoinGecko do
     case Chain.Hash.Address.cast(input) do
       {:ok, _} ->
         address_hash_str = input
-        "#{base_url()}/coins/ethereum/contract/#{address_hash_str}"
+        "#{base_url()}/coins/#{platform()}/contract/#{address_hash_str}"
 
       _ ->
         symbol = input
@@ -99,7 +99,7 @@ defmodule Explorer.ExchangeRates.Source.CoinGecko do
   end
 
   defp api_key do
-    Application.get_env(:explorer, ExchangeRates)[:coingecko_api_key] || nil
+    config(:api_key) || nil
   end
 
   def coin_id do
@@ -175,6 +175,10 @@ defmodule Explorer.ExchangeRates.Source.CoinGecko do
       _ ->
         1
     end
+  end
+
+  defp platform do
+    config(:platform) || "ethereum"
   end
 
   defp base_url do

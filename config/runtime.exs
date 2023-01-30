@@ -259,9 +259,6 @@ config :explorer, Explorer.Chain.Cache.AddressSumMinusBurnt, global_ttl: address
 config :explorer, Explorer.ExchangeRates,
   store: :ets,
   enabled: System.get_env("DISABLE_EXCHANGE_RATES") != "true",
-  coingecko_coin_id: System.get_env("EXCHANGE_RATES_COINGECKO_COIN_ID"),
-  coingecko_api_key: System.get_env("EXCHANGE_RATES_COINGECKO_API_KEY"),
-  coinmarketcap_api_key: System.get_env("EXCHANGE_RATES_COINMARKETCAP_API_KEY"),
   fetch_btc_value: System.get_env("EXCHANGE_RATES_FETCH_BTC_VALUE") == "true"
 
 exchange_rates_source =
@@ -272,6 +269,14 @@ exchange_rates_source =
   end
 
 config :explorer, Explorer.ExchangeRates.Source, source: exchange_rates_source
+
+config :explorer, Explorer.ExchangeRates.Source.CoinMarketCap,
+  api_key: System.get_env("EXCHANGE_RATES_COINMARKETCAP_API_KEY")
+
+config :explorer, Explorer.ExchangeRates.Source.CoinGecko,
+  platfortm: System.get_env("EXCHANGE_RATES_COINGECKO_COIN_ID"),
+  api_key: System.get_env("EXCHANGE_RATES_COINGECKO_API_KEY"),
+  coin_id: System.get_env("EXCHANGE_RATES_COINGECKO_COIN_ID")
 
 config :explorer, Explorer.KnownTokens, enabled: System.get_env("DISABLE_KNOWN_TOKENS") != "true", store: :ets
 

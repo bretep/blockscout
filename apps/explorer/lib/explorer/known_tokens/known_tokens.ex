@@ -1,7 +1,8 @@
 defmodule Explorer.KnownTokens do
   @moduledoc """
-  Local cache for known tokens addresses. This fetches and exposes a mapping from a token symbol to the known contract
-  address for the token with that symbol. This data can be consumed through the Market module.
+  Local cache for known tokens ids for CoinGecko. This fetches and exposes a mapping from contract
+  address or from token symbol to a coin id. This data consumed by `Explorer.ExchangeRates.TokenExchangeRates` and
+  `Explorer.ExchangeRates.Source.CoinGecko`.
 
   Data is updated every 1 hour.
   """
@@ -14,10 +15,12 @@ defmodule Explorer.KnownTokens do
   alias Explorer.KnownTokens.Source
 
   @interval :timer.hours(1)
-  @table_name :known_tokens
+  @address_to_coin_id_table_name :address_to_coin_gecko_coin_id
+  @symbol_to_coin_id_table_name :symbol_to_coin_gecko_coin_id
 
   @impl GenServer
   def handle_info(:update, state) do
+    IO.inspect("here??")
     Logger.debug(fn -> "Updating cached known tokens" end)
 
     fetch_known_tokens()
@@ -29,9 +32,21 @@ defmodule Explorer.KnownTokens do
   @impl GenServer
   def handle_info({_ref, {:ok, addresses}}, state) do
     if store() == :ets do
-      records = Enum.map(addresses, fn x -> {x["symbol"], x["address"]} end)
+      {symbols_to_ids, addresses_to_ids} =
+        Enum.reduce(
+          addresses,
+          fn
+            %{coin_id: coin_id, symbol: symbol, address_hash: nil}, {symbols_to_ids_acc, addresses_to_ids_acc} ->
+              {[{{symbol, coin_id}} | symbols_to_ids_acc], addresses_to_ids_acc}
 
-      :ets.insert(table_name(), records)
+            %{coin_id: coin_id, symbol: symbol, address_hash: address_hash},
+            {symbols_to_ids_acc, addresses_to_ids_acc} ->
+              {[{symbol, coin_id} | symbols_to_ids_acc], [{address_hash, coin_id} | addresses_to_ids_acc]}
+          end
+        )
+
+      :ets.insert(symbol_to_coin_id_table_name(), symbols_to_ids)
+      :ets.insert(address_to_coin_id_table_name(), addresses_to_ids)
     end
 
     {:noreply, state}
@@ -66,7 +81,8 @@ defmodule Explorer.KnownTokens do
     ]
 
     if store() == :ets do
-      :ets.new(table_name(), table_opts)
+      :ets.new(symbol_to_coin_id_table_name(), table_opts)
+      :ets.new(address_to_coin_id_table_name(), table_opts)
     end
 
     {:ok, %{}}
@@ -77,30 +93,24 @@ defmodule Explorer.KnownTokens do
   end
 
   @doc """
-  Lists known tokens.
+  Returns a CoinGecko coin id for a given symbol or address hash
   """
-  @spec list :: [{String.t(), Hash.Address.t()}]
-  def list do
-    if enabled?() do
-      list_from_store(store())
-    else
-      []
+  @spec lookup(String.t()) :: String.t() | nil
+  def lookup(symbol) when is_binary(symbol) do
+    if enabled?() and store() == :ets and ets_table_exists?(symbol_to_coin_id_table_name()) do
+      case :ets.lookup(symbol_to_coin_id_table_name(), symbol) do
+        [{_symbol, coin_id} | _] -> coin_id
+        _ -> nil
+      end
     end
   end
 
-  @doc """
-  Returns a specific address from the known tokens by symbol
-  """
-  @spec lookup(String.t()) :: {:ok, Hash.Address.t()} | :error | nil
-  def lookup(symbol) do
-    if store() == :ets && enabled?() do
-      if ets_table_exists?(table_name()) do
-        case :ets.lookup(table_name(), symbol) do
-          [{_symbol, address} | _] -> Hash.Address.cast(address)
-          _ -> nil
-        end
-      else
-        nil
+  @spec lookup(Hash.Address.t()) :: String.t() | nil
+  def lookup(address_hash) do
+    if enabled?() and store() == :ets and ets_table_exists?(address_to_coin_id_table_name()) do
+      case :ets.lookup(address_to_coin_id_table_name(), address_hash) do
+        [{_address_hash, coin_id} | _] -> coin_id
+        _ -> nil
       end
     end
   end
@@ -110,9 +120,15 @@ defmodule Explorer.KnownTokens do
   end
 
   @doc false
-  @spec table_name() :: atom()
-  def table_name do
-    config(:table_name) || @table_name
+  @spec symbol_to_coin_id_table_name() :: atom()
+  def symbol_to_coin_id_table_name do
+    config(:symbol_to_coin_id_table_name) || @symbol_to_coin_id_table_name
+  end
+
+  @doc false
+  @spec address_to_coin_id_table_name() :: atom()
+  def address_to_coin_id_table_name do
+    config(:address_to_coin_id_table_name) || @address_to_coin_id_table_name
   end
 
   @spec config(atom()) :: term
@@ -122,20 +138,12 @@ defmodule Explorer.KnownTokens do
 
   @spec fetch_known_tokens :: Task.t()
   defp fetch_known_tokens do
+    IO.inspect("here")
     Task.Supervisor.async_nolink(Explorer.MarketTaskSupervisor, fn ->
+      IO.inspect("here")
       Source.fetch_known_tokens()
     end)
   end
-
-  defp list_from_store(:ets) do
-    table_name()
-    |> :ets.tab2list()
-    |> Enum.map(&elem(&1, 1))
-    |> Enum.map(&Hash.Address.cast/1)
-    |> Enum.sort()
-  end
-
-  defp list_from_store(_), do: []
 
   defp store do
     config(:store) || :ets

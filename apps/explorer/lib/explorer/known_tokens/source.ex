@@ -11,8 +11,13 @@ defmodule Explorer.KnownTokens.Source do
   """
   @spec fetch_known_tokens() :: {:ok, [Hash.Address.t()]} | {:error, any}
   def fetch_known_tokens(source \\ known_tokens_source()) do
-    Source.http_request(source.source_url(), source.headers())
+    source.source_url() |> Source.http_request(source.headers()) |> source.format_data
   end
+
+  @doc """
+  Callback for api's to format the data returned by their query.
+  """
+  @callback format_data(map()) :: [%{coin_id: String.t(), symbol: String.t(), address_hash: Hash.Address.t() | nil}]
 
   @doc """
   Url for querying the list of known tokens.

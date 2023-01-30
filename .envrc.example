@@ -1,0 +1,43 @@
+# This should point to a blockscout frontend server
+# ssh -NT -i /path/to/ssh.key ssh -l ubuntu BLOCKSCOUT_FE -L 5433:terraform-20230126214748732100000002.cuxc8l8sgtvz.us-east-1.rds.amazonaws.com:5432 -L 8899:execution-explorer-archive.service.us-east-1.consul:80 -L 8898:execution-explorer-archive.service.us-east-1.consul:8576
+
+#export ADMIN_PANEL_ENABLED=true
+export APPS='[ { "title": "Testnet v3 Beacon Explorer", "url": "https://beacon.v3.testnet.pulsechain.com", "embedded?": false }, { "title": "PulseX", "url": "https://app.v2b.testnet.pulsex.com/swap", "embedded?": false }, { "title": "Pulseramp Bridge", "url": "https://pulseramp.com/", "embedded?": false }, { "title": "Sacrifice Checker", "url": "https://pulsechain-sacrifice-checker.vercel.app/", "embedded?": false }, { "title": "Testnet v3 Faucet", "url": "https://faucet.v3.testnet.pulsechain.com/", "embedded?": false } ]'
+export ALLOWED_EVM_VERSIONS=homestead,tangerineWhistle,spuriousDragon,byzantium,constantinople,petersburg,istanbul,berlin,london,primordialPulse
+export API_URL=https://scan.v3.testnet.pulsechain.com
+export BLOCKSCOUT_HOST=scan.v3.testnet.pulsechain.com
+export BLOCKSCOUT_PROTOCOL=https
+export BLOCK_TRANSFORMER=base
+export CHAIN_ID=942
+export COIN=tPLS
+export COIN_NAME=tPLS
+export DATABASE_URL=postgres://root:PASSWORD_HERE@localhost:5433/blockscout
+export DISABLE_EXCHANGE_RATES=false
+export DISABLE_INDEXER=true
+export DISABLE_READ_API=false
+export DISABLE_WEBAPP=false
+export DISABLE_WRITE_API=false
+export DISPLAY_TOKEN_ICONS=true
+export ECTO_USE_SSL=false
+export ENABLE_1559_SUPPORT=true
+export ENABLE_SOURCIFY_INTEGRATION=true
+export ETHEREUM_JSONRPC_HTTP_INSECURE=true
+export ETHEREUM_JSONRPC_HTTP_URL=http://localhost:8899
+export ETHEREUM_JSONRPC_TRACE_URL=http://localhost:8899
+export ETHEREUM_JSONRPC_TRANSPORT=http
+export ETHEREUM_JSONRPC_VARIANT=geth
+export ETHEREUM_JSONRPC_WS_URL=ws://localhost:8898
+export EXCHANGE_RATES_COIN=tPLS
+export LINK_TO_OTHER_EXPLORERS=false
+export LOGO=/images/LogoVector.svg
+export LOGO_FOOTER=/images/LogoVector.svg
+export LOGO_TEXT=PulseChain
+export MIX_ENV=dev
+export NETWORK=PulseChain
+export OTHER_EXPLORERS='[ { "title": "Testnet v3", "url": "https://scan.v3.testnet.pulsechain.com" }, { "title": "Testnet v2b", "url": "https://scan.v2b.testnet.pulsechain.com" } ]'
+export POOL_SIZE=90
+export PORT=4000
+export SECRET_KEY_BASE=Fxm2mBUrHMT5bQXTP63kCtjCmuyHBUYYIy8BGryBmSHfRIKeONlJlkachJLkY5Ml
+export SUBNETWORK="Testnet v3"
+export SUPPORTED_CHAINS='[ { "title": "Testnet v3", "url": "https://scan.v3.testnet.pulsechain.com", "test_net?": true }, { "title": "Testnet v2b", "url": "https://scan.v2b.testnet.pulsechain.com", "test_net?": true } ]'
+export WEBAPP_URL=https://scan.v3.testnet.pulsechain.com

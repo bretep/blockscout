@@ -120,7 +120,7 @@ msgstr ""
 #: lib/block_scout_web/templates/transaction_state/_state_change.html.eex:21
 #, elixir-autogen, elixir-format
 msgid "A block producer who successfully included the block onto the blockchain."
-msgstr ""
+msgstr "Tips from included transactions were paid to this address."
 
 #: lib/block_scout_web/templates/layout/app.html.eex:97
 #, elixir-autogen, elixir-format
@@ -504,7 +504,7 @@ msgstr ""
 #: lib/block_scout_web/templates/layout/app.html.eex:47
 #, elixir-autogen, elixir-format
 msgid "Block Mined, awaiting import..."
-msgstr ""
+msgstr "Block Proposed, awaiting import..."
 
 #: lib/block_scout_web/views/transaction_view.ex:34
 #, elixir-autogen, elixir-format
@@ -534,7 +534,7 @@ msgstr ""
 #: lib/block_scout_web/templates/chain/_metatags.html.eex:4
 #, elixir-autogen, elixir-format
 msgid "BlockScout provides analytics data, API, and Smart Contract tools for the %{subnetwork}"
-msgstr ""
+msgstr "PulseChain %{subnetwork} explorer provides analytics data, API, and Smart Contract tools"
 
 #: lib/block_scout_web/templates/layout/_topnav.html.eex:29
 #, elixir-autogen, elixir-format
@@ -559,7 +559,7 @@ msgstr ""
 #: lib/block_scout_web/views/address_view.ex:385
 #, elixir-autogen, elixir-format
 msgid "Blocks Validated"
-msgstr ""
+msgstr "Fee Recipient Blocks"
 
 #: lib/block_scout_web/templates/layout/app.html.eex:48
 #, elixir-autogen, elixir-format
@@ -624,7 +624,7 @@ msgstr ""
 #: lib/block_scout_web/templates/layout/_footer.html.eex:43
 #, elixir-autogen, elixir-format
 msgid "Chat (#blockscout)"
-msgstr ""
+msgstr "Telegram"
 
 #: lib/block_scout_web/views/block_view.ex:65
 #, elixir-autogen, elixir-format
@@ -1488,7 +1488,7 @@ msgstr ""
 #: lib/block_scout_web/views/wei_helper.ex:77
 #, elixir-autogen, elixir-format
 msgid "Gwei"
-msgstr ""
+msgstr "Beat"
 
 #: lib/block_scout_web/templates/block/overview.html.eex:123
 #, elixir-autogen, elixir-format
@@ -1785,7 +1785,7 @@ msgstr ""
 #: lib/block_scout_web/templates/transaction_state/_state_change.html.eex:22
 #, elixir-autogen, elixir-format
 msgid "Miner"
-msgstr ""
+msgstr "Fee Recipient"
 
 #: lib/block_scout_web/views/block_view.ex:63
 #: lib/block_scout_web/views/block_view.ex:68
@@ -1962,7 +1962,7 @@ msgstr ""
 #: lib/block_scout_web/templates/address/overview.html.eex:274
 #, elixir-autogen, elixir-format
 msgid "Number of blocks validated by this validator."
-msgstr ""
+msgstr "Number of blocks this address was the fee recipient."
 
 #: lib/block_scout_web/templates/tokens/overview/_details.html.eex:130
 #, elixir-autogen, elixir-format
@@ -2611,7 +2611,7 @@ msgstr ""
 #: lib/block_scout_web/templates/address/overview.html.eex:85
 #, elixir-autogen, elixir-format
 msgid "The name of the validator."
-msgstr ""
+msgstr "The name of the Fee Recipient."
 
 #: lib/block_scout_web/templates/block/overview.html.eex:79
 #, elixir-autogen, elixir-format
@@ -2646,7 +2646,7 @@ msgstr ""
 #: lib/block_scout_web/templates/address_validation/index.html.eex:16
 #, elixir-autogen, elixir-format
 msgid "There are no blocks validated by this address."
-msgstr ""
+msgstr "There are no blocks this address was a fee recipient."
 
 #: lib/block_scout_web/templates/block/index.html.eex:17
 #, elixir-autogen, elixir-format
@@ -3205,42 +3205,42 @@ msgstr ""
 #: lib/block_scout_web/templates/transaction/overview.html.eex:417
 #, elixir-autogen, elixir-format
 msgid "User defined maximum fee (tip) per unit of gas paid to validator for transaction prioritization."
-msgstr ""
+msgstr "User defined maximum fee (tip) per unit of gas paid to validator Fee Recipient for transaction prioritization."
 
 #: lib/block_scout_web/templates/transaction/overview.html.eex:427
 #, elixir-autogen, elixir-format
 msgid "User-defined tip sent to validator for transaction priority/inclusion."
-msgstr ""
+msgstr "User-defined tip sent to validator Fee Recipient for transaction priority/inclusion."
 
 #: lib/block_scout_web/templates/block/overview.html.eex:224
 #, elixir-autogen, elixir-format
 msgid "User-defined tips sent to validator for transaction priority/inclusion."
-msgstr ""
+msgstr "User-defined tips sent to validator Fee Recipient for transaction priority/inclusion."
 
 #: lib/block_scout_web/templates/layout/_topnav.html.eex:56
 #, elixir-autogen, elixir-format
 msgid "Validated"
-msgstr ""
+msgstr "Confirmed"
 
 #: lib/block_scout_web/templates/transaction/index.html.eex:12
 #, elixir-autogen, elixir-format
 msgid "Validated Transactions"
-msgstr ""
+msgstr "Confirmed Transactions"
 
 #: lib/block_scout_web/templates/address/_validator_metadata_modal.html.eex:30
 #, elixir-autogen, elixir-format
 msgid "Validator Creation Date"
-msgstr ""
+msgstr "Fee Recipient Creation Date"
 
 #: lib/block_scout_web/templates/address/_validator_metadata_modal.html.eex:5
 #, elixir-autogen, elixir-format
 msgid "Validator Data"
-msgstr ""
+msgstr "Fee Recipient Data"
 
 #: lib/block_scout_web/templates/address/overview.html.eex:86
 #, elixir-autogen, elixir-format
 msgid "Validator Name"
-msgstr ""
+msgstr "Fee Recipient Name"
 
 #: lib/block_scout_web/templates/address_withdrawal/index.html.eex:32
 #: lib/block_scout_web/templates/block_withdrawal/index.html.eex:26
@@ -3419,7 +3419,7 @@ msgstr ""
 #: lib/block_scout_web/templates/smart_contract/_functions.html.eex:142
 #, elixir-autogen, elixir-format
 msgid "WEI"
-msgstr ""
+msgstr "IMPULSE"
 
 #: lib/block_scout_web/templates/smart_contract/_pending_contract_write.html.eex:9
 #, elixir-autogen, elixir-format
@@ -3451,7 +3451,7 @@ msgstr ""
 #: lib/block_scout_web/views/wei_helper.ex:76
 #, elixir-autogen, elixir-format
 msgid "Wei"
-msgstr ""
+msgstr "Impulse"
 
 #: lib/block_scout_web/templates/address/_tabs.html.eex:29
 #: lib/block_scout_web/templates/address_withdrawal/index.html.eex:13

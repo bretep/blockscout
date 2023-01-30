@@ -159,9 +159,9 @@ defmodule BlockScoutWeb.Mixfile do
 
   defp package do
     [
-      maintainers: ["Blockscout"],
+      maintainers: ["Pulsechain"],
       licenses: ["GPL 3.0"],
-      links: %{"GitHub" => "https://github.com/blockscout/blockscout"}
+      links: %{"GitHub" => "https://gitlab.com/pulsechaincom/blockscout"}
     ]
   end
 end

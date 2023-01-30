@@ -15,17 +15,30 @@ defmodule Explorer.ThirdPartyIntegrations.Sourcify do
   def check_by_address(address_hash_string) do
     chain_id = config(__MODULE__, :chain_id)
     params = [addresses: address_hash_string, chainIds: chain_id]
-    http_get_request(check_by_address_url(), params)
+    case http_get_request(check_by_address_url(), params) do
+      {:error, _} ->
+        params = [addresses: address_hash_string, chainIds: "1"]
+        http_get_request(check_by_address_url(), params)
+    end
+
   end
 
   def check_by_address_any(address_hash_string) do
     get_metadata_full_url = get_metadata_any_url() <> "/" <> address_hash_string
-    http_get_request(get_metadata_full_url, [])
+    case http_get_request(get_metadata_full_url, []) do
+      {:error, _} ->
+        get_metadata_full_url = get_metadata_any_url() <> "/" <> address_hash_string
+        http_get_request(get_metadata_full_url, [])
+    end
   end
 
   def get_metadata(address_hash_string) do
     get_metadata_full_url = get_metadata_url() <> "/" <> address_hash_string
-    http_get_request(get_metadata_full_url, [])
+    case http_get_request(get_metadata_full_url, []) do
+      {:error, _} ->
+        get_metadata_full_url = get_metadata_url() <> "/" <> address_hash_string
+        http_get_request(get_metadata_full_url, [])
+    end
   end
 
   def verify(address_hash_string, files, chosen_contract) do
@@ -46,7 +59,28 @@ defmodule Explorer.ThirdPartyIntegrations.Sourcify do
 
     multipart_body = prepare_body_for_sourcify(files, multipart_text_params)
 
-    http_post_request(verify_url(), multipart_body)
+    case http_post_request(verify_url(), multipart_body) do
+      {:error, _} ->
+        multipart_text_params =
+          Multipart.new()
+          |> Multipart.add_field("chain", "1")
+          |> Multipart.add_field("address", address_hash_string)
+
+        multipart_body =
+          files
+          |> Enum.reduce(multipart_text_params, fn file, acc ->
+            if file do
+              acc
+              |> Multipart.add_file(file.path,
+                   name: "files",
+                   file_name: Path.basename(file.path)
+                 )
+            else
+              acc
+            end
+          end)
+        http_post_request(verify_url(), multipart_body)
+    end
   end
 
   defp prepare_body_for_sourcify(files, multipart_text_params) when is_map(files) do
@@ -91,7 +125,40 @@ defmodule Explorer.ThirdPartyIntegrations.Sourcify do
       body_params
       |> Map.put("files", files_body)
 
-    http_post_request_rust_microservice(verify_url_rust_microservice(), body)
+    case http_post_request_rust_microservice(verify_url_rust_microservice(), body) do
+      {:error, _} ->
+        body_params =
+          Map.new()
+          |> Map.put("chain", "1")
+          |> Map.put("address", address_hash_string)
+
+        files_body =
+          files
+          |> Enum.reduce(Map.new(), fn file, acc ->
+            if file do
+              {:ok, file_content} = File.read(file.path)
+
+              file_content =
+                if Helper.json_file?(file.filename) do
+                  file_content
+                  |> Jason.decode!()
+                  |> Jason.encode!()
+                else
+                  file_content
+                end
+
+              acc
+              |> Map.put(file.filename, file_content)
+            else
+              acc
+            end
+          end)
+
+        body =
+          body_params
+          |> Map.put("files", files_body)
+        http_post_request_rust_microservice(verify_url_rust_microservice(), body)
+    end
   end
 
   defp add_chosen_contract(params, index) when is_binary(index) do

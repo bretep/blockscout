@@ -1,5 +1,8 @@
 import Config
 
+# Pulsechain addition to support live loading in development
+config :block_scout_web, :environment, :prod
+
 # For production, we often load configuration from external
 # sources, such as your system environment. For this reason,
 # you won't find the :http configuration below, but set inside

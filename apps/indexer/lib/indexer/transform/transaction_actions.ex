@@ -22,6 +22,8 @@ defmodule Indexer.Transform.TransactionActions do
   @polygon 137
   @base_mainnet 8453
   @base_goerli 84531
+  @pulsechain 369
+  @pulsechain_testnet_v4 943
   # @gnosis 100
 
   @uniswap_v3_factory_abi [
@@ -163,7 +165,7 @@ defmodule Indexer.Transform.TransactionActions do
   end
 
   defp parse_uniswap_v3(logs, actions, protocols_to_rewrite, chain_id) do
-    if Enum.member?([@mainnet, @goerli, @optimism, @polygon, @base_mainnet, @base_goerli], chain_id) and
+    if Enum.member?([@mainnet, @goerli, @optimism, @polygon, @base_mainnet, @base_goerli, @pulsechain, @pulsechain_testnet_v4], chain_id) and
          (is_nil(protocols_to_rewrite) or Enum.empty?(protocols_to_rewrite) or
             Enum.member?(protocols_to_rewrite, "uniswap_v3")) do
       uniswap_v3_positions_nft =

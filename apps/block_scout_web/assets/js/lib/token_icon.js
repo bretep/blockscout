@@ -1,4 +1,4 @@
-function getTokenIconUrl (chainID, addressHash) {
+async function getTokenIconUrl (chainID, addressHash) {
   let chainName = null
   switch (chainID) {
     case '1':
@@ -10,12 +10,21 @@ function getTokenIconUrl (chainID, addressHash) {
     case '100':
       chainName = 'xdai'
       break
+    case '369':
+      chainName = 'pulsechain'
+      break
+    case '943':
+      chainName = 'pulsechain-testnet-v4'
+      break
     default:
       chainName = null
       break
   }
   if (chainName) {
-    return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainName}/assets/${addressHash}/logo.png`
+    if (await checkLink(`https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainName}/assets/${addressHash}/logo.png`)) {
+      return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainName}/assets/${addressHash}/logo.png`
+    }
+    return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/${addressHash}/logo.png`
   } else {
     return '/images/icons/token_icon_default.svg'
   }
@@ -23,10 +32,9 @@ function getTokenIconUrl (chainID, addressHash) {
 
 function appendTokenIcon ($tokenIconContainer, chainID, addressHash, displayTokenIcons, size) {
   const iconSize = size || 20
-  const tokenIconURL = getTokenIconUrl(chainID.toString(), addressHash)
-  if (displayTokenIcons) {
-    checkLink(tokenIconURL)
-      .then(checkTokenIconLink => {
+  getTokenIconUrl(chainID.toString(), addressHash).then((tokenIconURL) => {
+    if (displayTokenIcons) {
+      checkLink(tokenIconURL).then(checkTokenIconLink => {
         if (checkTokenIconLink) {
           if ($tokenIconContainer) {
             const img = new Image(iconSize, iconSize)
@@ -36,7 +44,8 @@ function appendTokenIcon ($tokenIconContainer, chainID, addressHash, displayToke
           }
         }
       })
-  }
+    }
+  })
 }
 
 async function checkLink (url) {

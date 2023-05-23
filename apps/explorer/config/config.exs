@@ -31,7 +31,7 @@ config :explorer, Explorer.Chain.Cache.AddressSumMinusBurnt,
 update_interval_in_milliseconds = ConfigHelper.parse_time_env_var("CACHE_ADDRESS_WITH_BALANCES_UPDATE_INTERVAL", "30m")
 
 config :explorer, Explorer.Counters.AddressesWithBalanceCounter,
-  enabled: false,
+  enabled: true,
   enable_consolidation: true,
   update_interval_in_milliseconds: update_interval_in_milliseconds
 

@@ -728,8 +728,12 @@ defmodule Explorer.Chain.SmartContract do
         true ->
           get_implementation_address_hash_eip_1967(proxy_address_hash)
       end
+      cond do
+      !ConfigHelper.parse_bool_env_var("PULSE_READ_ONLY_FRONT_END","false") ->
+        save_implementation_data(implementation_address, proxy_address_hash, metadata_from_verified_twin, options)
+      true -> nil
+    end
 
-    save_implementation_data(implementation_address, proxy_address_hash, metadata_from_verified_twin, options)
   end
 
   defp get_implementation_address_hash(_proxy_address_hash, _abi, _, _) do

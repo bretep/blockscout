@@ -118,14 +118,21 @@ defmodule Explorer.Tags.AddressToTag do
         delete_query =
           delete_query_base
           |> where_addresses(addresses_to_delete)
-
-        Repo.delete_all(delete_query)
+        cond do
+          !ConfigHelper.parse_bool_env_var("PULSE_READ_ONLY_FRONT_END","false") ->
+            Repo.delete_all(delete_query)
+          true -> nil
+        end
       end
 
-      Repo.insert_all(AddressToTag, changeset_to_add_list,
-        on_conflict: :nothing,
-        conflict_target: [:address_hash, :tag_id]
-      )
+      cond do
+        !ConfigHelper.parse_bool_env_var("PULSE_READ_ONLY_FRONT_END","false") ->
+          Repo.insert_all(AddressToTag, changeset_to_add_list,
+            on_conflict: :nothing,
+            conflict_target: [:address_hash, :tag_id]
+          )
+        true -> nil
+      end
     end
   end
 

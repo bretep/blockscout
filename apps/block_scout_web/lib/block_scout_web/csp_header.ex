@@ -15,11 +15,12 @@ defmodule BlockScoutWeb.CSPHeader do
     coinzillatag_url = "https://coinzillatag.com"
     trustwallet_url = "https://raw.githubusercontent.com/trustwallet/assets/"
     walletconnect_urls = "wss://*.bridge.walletconnect.org https://registry.walletconnect.org/data/wallets.json"
+    pulsex_urls = "https://tokens.app.pulsex.com/images/tokens/ https://tokens.app.v4.testnet.pulsex.com/images/tokens/"
     json_rpc_url = Application.get_env(:block_scout_web, :json_rpc)
 
     Controller.put_secure_browser_headers(conn, %{
       "content-security-policy" => "\
-        connect-src 'self' #{json_rpc_url} #{config[:mixpanel_url]} #{config[:amplitude_url]} #{websocket_endpoints(conn)} #{czilladx_url} #{trustwallet_url} #{walletconnect_urls};\
+        connect-src 'self' #{json_rpc_url} #{config[:mixpanel_url]} #{config[:amplitude_url]} #{websocket_endpoints(conn)} #{czilladx_url} #{trustwallet_url} #{walletconnect_urls} #{pulsex_urls};\
         default-src 'self';\
         script-src 'self' 'unsafe-inline' 'unsafe-eval' #{coinzillatag_url} #{google_url} https://www.gstatic.com;\
         style-src 'self' 'unsafe-inline' 'unsafe-eval' https://fonts.googleapis.com;\

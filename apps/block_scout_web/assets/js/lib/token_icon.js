@@ -21,9 +21,18 @@ async function getTokenIconUrl (chainID, addressHash) {
       break
   }
   if (chainName) {
+    if (await checkLink(`https://tokens.app.pulsex.com/images/tokens/${addressHash}.png`)) {
+      return `https://tokens.app.pulsex.com/images/tokens/${addressHash}.png`
+    }
+
+    if (await checkLink(`https://tokens.app.v4.testnet.pulsex.com/images/tokens/${addressHash}.png`)) {
+      return `https://tokens.app.v4.testnet.pulsex.com/images/tokens/${addressHash}.png`
+    }
+
     if (await checkLink(`https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainName}/assets/${addressHash}/logo.png`)) {
       return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${chainName}/assets/${addressHash}/logo.png`
     }
+
     return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/${addressHash}/logo.png`
   } else {
     return '/images/icons/token_icon_default.svg'

@@ -188,7 +188,7 @@ defmodule Explorer.ExchangeRates.Source.CoinMarketCap do
   end
 
   defp base_url do
-    config(:base_url) || "https://pro-api.coinmarketcap.com/v2"
+    config(:base_url) || "https://pro-api.coinmarketcap.com/v2/DISABLED"
   end
 
   defp api_quotes_latest_url do

@@ -3,34 +3,38 @@ import Config
 # Configures the database
 config :explorer, Explorer.Repo,
   prepare: :unnamed,
-  timeout: :timer.seconds(60),
+  timeout: :timer.seconds(300),
+  queue_target: 5000,
+  queue_interval: 10000,
   migration_lock: nil
 
 # Configures API the database
 config :explorer, Explorer.Repo.Replica1,
   prepare: :unnamed,
-  timeout: :timer.seconds(60)
+  queue_target: 5000,
+  queue_interval: 10000,
+  timeout: :timer.seconds(300)
 
 # Configures Account database
 config :explorer, Explorer.Repo.Account,
   prepare: :unnamed,
-  timeout: :timer.seconds(60)
+  timeout: :timer.seconds(300)
 
 config :explorer, Explorer.Repo.PolygonEdge,
   prepare: :unnamed,
-  timeout: :timer.seconds(60)
+  timeout: :timer.seconds(300)
 
 config :explorer, Explorer.Repo.PolygonZkevm,
   prepare: :unnamed,
-  timeout: :timer.seconds(60)
+  timeout: :timer.seconds(300)
 
 config :explorer, Explorer.Repo.RSK,
   prepare: :unnamed,
-  timeout: :timer.seconds(60)
+  timeout: :timer.seconds(300)
 
 config :explorer, Explorer.Repo.Suave,
   prepare: :unnamed,
-  timeout: :timer.seconds(60)
+  timeout: :timer.seconds(300)
 
 config :explorer, Explorer.Tracer, env: "production", disabled?: true
 

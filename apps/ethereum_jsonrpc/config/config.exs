@@ -6,15 +6,16 @@ config :ethereum_jsonrpc, EthereumJSONRPC.RequestCoordinator,
     duration: :timer.minutes(1),
     table: EthereumJSONRPC.RequestCoordinator.TimeoutCounter
   ],
-  max_jitter: :timer.seconds(2)
-
-# Add this configuration to add global RPC request throttling.
-# throttle_rate_limit: 250,
-# throttle_rolling_window_opts: [
-#   window_count: 4,
-#   duration: :timer.seconds(15),
-#   table: EthereumJSONRPC.RequestCoordinator.ThrottleCounter
-# ]
+  max_jitter: :timer.seconds(2),
+  # Global RPC request throttling - limits total requests to prevent node overload
+  # 100 requests per 15 seconds = ~6.7 req/s sustained rate
+  # Adjust based on your Erigon's capacity
+  throttle_rate_limit: 100,
+  throttle_rolling_window_opts: [
+    window_count: 3,
+    duration: :timer.seconds(15),
+    table: EthereumJSONRPC.RequestCoordinator.ThrottleCounter
+  ]
 
 config :ethereum_jsonrpc, EthereumJSONRPC.Tracer,
   service: :ethereum_jsonrpc,

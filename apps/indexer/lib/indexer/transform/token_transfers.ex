@@ -177,7 +177,7 @@ defmodule Indexer.Transform.TokenTransfers do
     {token, token_transfer}
   end
 
-  # ERC-20 token transfer for WETH
+  # ERC-20 token transfer for WETH (indexed address in second_topic)
   defp parse_params(%{second_topic: second_topic, third_topic: nil, fourth_topic: nil} = log)
        when not is_nil(second_topic) do
     [amount] = decode_data(log.data, [{:uint, 256}])
@@ -187,6 +187,43 @@ defmodule Indexer.Transform.TokenTransfers do
         {burn_address_hash_string(), truncate_address_hash(log.second_topic)}
       else
         {truncate_address_hash(log.second_topic), burn_address_hash_string()}
+      end
+
+    token_transfer = %{
+      amount: Decimal.new(amount || 0),
+      block_number: log.block_number,
+      block_hash: log.block_hash,
+      log_index: log.index,
+      from_address_hash: from_address_hash,
+      to_address_hash: to_address_hash,
+      token_contract_address_hash: log.address_hash,
+      transaction_hash: log.transaction_hash,
+      token_ids: nil,
+      token_type: "ERC-20"
+    }
+
+    token = %{
+      contract_address_hash: log.address_hash,
+      type: "ERC-20"
+    }
+
+    {token, token_transfer}
+  end
+
+  # ERC-20 token transfer for WETH (non-indexed address in data field)
+  # Some wrapped token contracts emit Deposit/Withdrawal with address in data instead of topics
+  defp parse_params(%{first_topic: first_topic, second_topic: nil, third_topic: nil, fourth_topic: nil, data: data} = log)
+       when first_topic in [
+              unquote(TokenTransfer.weth_deposit_signature()),
+              unquote(TokenTransfer.weth_withdrawal_signature())
+            ] and not is_nil(data) do
+    [address, amount] = decode_data(data, [:address, {:uint, 256}])
+
+    {from_address_hash, to_address_hash} =
+      if first_topic == TokenTransfer.weth_deposit_signature() do
+        {burn_address_hash_string(), encode_address_hash(address)}
+      else
+        {encode_address_hash(address), burn_address_hash_string()}
       end
 
     token_transfer = %{

@@ -68,16 +68,21 @@ defmodule Explorer.Chain.Cache.ContractsCounter do
 
   @doc """
   Consolidates the info by populating the `last_fetched_counters` table with the current database information.
+  Only updates if the new count is >= current count to prevent counts going backwards.
   """
   def consolidate do
-    all_counter = Chain.count_contracts()
+    new_counter = Chain.count_contracts()
+    current_counter = fetch([]) || 0
 
-    params = %{
-      counter_type: @counter_type,
-      value: all_counter
-    }
+    # Only update if new value is >= current to prevent counts going backwards
+    if new_counter >= current_counter do
+      params = %{
+        counter_type: @counter_type,
+        value: new_counter
+      }
 
-    Chain.upsert_last_fetched_counter(params)
+      Chain.upsert_last_fetched_counter(params)
+    end
   end
 
   @doc """

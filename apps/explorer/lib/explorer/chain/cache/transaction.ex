@@ -1,74 +1,36 @@
 defmodule Explorer.Chain.Cache.Transaction do
   @moduledoc """
   Cache for estimated transaction count.
+
+  This module provides the `estimated_count/0` function which returns the transaction count.
+  It first checks the TransactionsCounter (incremental counter) and falls back to pg_class.reltuples.
   """
 
-  use Explorer.Chain.MapCache,
-    name: :transaction_count,
-    key: :count,
-    key: :async_task,
-    global_ttl: Application.get_env(:explorer, __MODULE__)[:global_ttl],
-    ttl_check_interval: :timer.seconds(1),
-    callback: &async_task_on_deletion(&1)
-
-  require Logger
-
   alias Explorer.Chain.Cache.Helper
-  alias Explorer.Chain.Transaction
-  alias Explorer.Repo
+  alias Explorer.Chain.Cache.TransactionsCounter
 
   @doc """
   Estimated count of `t:Explorer.Chain.Transaction.t/0`.
 
-  Estimated count of both collated and pending transactions using the transactions table statistics.
+  Returns the transaction count from the incremental TransactionsCounter if available,
+  otherwise falls back to pg_class.reltuples estimate.
   """
   @spec estimated_count() :: non_neg_integer()
   def estimated_count do
-    cached_value = __MODULE__.get_count()
+    # First try the incremental counter (stored in last_fetched_counters table)
+    count =
+      case TransactionsCounter.fetch([]) do
+        nil -> 0
+        %Decimal{} = val -> Decimal.to_integer(val)
+        val when is_integer(val) -> val
+        val -> val |> Decimal.new() |> Decimal.to_integer()
+      end
 
-    if is_nil(cached_value) do
-      count = Helper.estimated_count_from("transactions")
-
-      max(count, 0)
+    # Fall back to pg_class.reltuples estimate if counter is 0 or nil
+    if count == 0 do
+      max(Helper.estimated_count_from("transactions"), 0)
     else
-      cached_value
+      count
     end
   end
-
-  defp handle_fallback(:count) do
-    # This will get the task PID if one exists and launch a new task if not
-    # See next `handle_fallback` definition
-    get_async_task()
-
-    {:return, nil}
-  end
-
-  defp handle_fallback(:async_task) do
-    # If this gets called it means an async task was requested, but none exists
-    # so a new one needs to be launched
-    {:ok, task} =
-      Task.start(fn ->
-        try do
-          result = Repo.aggregate(Transaction, :count, :hash, timeout: :infinity)
-
-          set_count(result)
-        rescue
-          e ->
-            Logger.debug([
-              "Couldn't update transaction count: ",
-              Exception.format(:error, e, __STACKTRACE__)
-            ])
-        end
-
-        set_async_task(nil)
-      end)
-
-    {:update, task}
-  end
-
-  # By setting this as a `callback` an async task will be started each time the
-  # `count` expires (unless there is one already running)
-  defp async_task_on_deletion({:delete, _, :count}), do: get_async_task()
-
-  defp async_task_on_deletion(_data), do: nil
 end

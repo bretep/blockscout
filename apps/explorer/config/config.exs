@@ -71,6 +71,16 @@ config :explorer, Explorer.Chain.Cache.NewVerifiedContractsCounter,
   enable_consolidation: true,
   update_interval_in_milliseconds: update_interval_in_milliseconds_default
 
+# Incremental transaction counter - updates on each new block
+config :explorer, Explorer.Chain.Cache.TransactionsCounter,
+  enabled: true,
+  enable_consolidation: true
+
+# Incremental gas usage counter - updates on each new block
+config :explorer, Explorer.Chain.Cache.GasUsageCounter,
+  enabled: true,
+  enable_consolidation: true
+
 config :explorer, Explorer.Chain.Cache.WithdrawalsSum,
   enabled: true,
   enable_consolidation: true,

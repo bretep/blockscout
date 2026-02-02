@@ -64,6 +64,8 @@ defmodule EthereumJsonrpc.MixProject do
       {:dialyxir, "~> 1.1", only: [:dev, :test], runtime: false},
       # JSONRPC HTTP Post calls
       {:httpoison, "~> 2.0"},
+      # Alternative HTTP client for large responses
+      {:finch, "~> 0.18"},
       # Decode/Encode JSON for JSONRPC
       {:jason, "~> 1.3"},
       # Log errors and application output to separate files

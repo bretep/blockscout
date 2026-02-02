@@ -305,6 +305,10 @@ config :explorer, Explorer.ExchangeRates.TokenExchangeRates,
 
 config :explorer, Explorer.Market.History.Cataloger, enabled: !disable_indexer? && !disable_exchange_rates?
 
+# Incremental counters - only run consolidation on indexer, not API servers
+config :explorer, Explorer.Chain.Cache.TransactionsCounter, enabled: true, enable_consolidation: !disable_indexer?
+config :explorer, Explorer.Chain.Cache.GasUsageCounter, enabled: true, enable_consolidation: !disable_indexer?
+
 config :explorer, Explorer.Chain.Transaction, suave_bid_contracts: System.get_env("SUAVE_BID_CONTRACTS", "")
 
 config :explorer, Explorer.Chain.Transaction.History.Historian,

@@ -7,6 +7,13 @@ import Config
 hackney_opts = ConfigHelper.hackney_options()
 timeout = ConfigHelper.timeout(10)
 
+http_module =
+  case System.get_env("ETHEREUM_JSONRPC_HTTP_CLIENT", "httpoison") do
+    "finch" -> EthereumJSONRPC.HTTP.Finch
+    "httpc" -> EthereumJSONRPC.HTTP.HTTPC
+    _ -> EthereumJSONRPC.HTTP.HTTPoison
+  end
+
 config :indexer,
   block_interval: ConfigHelper.parse_time_env_var("INDEXER_CATCHUP_BLOCK_INTERVAL", "5s"),
   json_rpc_named_arguments: [
@@ -16,7 +23,7 @@ config :indexer,
         else: EthereumJSONRPC.IPC
       ),
     transport_options: [
-      http: EthereumJSONRPC.HTTP.HTTPoison,
+      http: http_module,
       url: System.get_env("ETHEREUM_JSONRPC_HTTP_URL"),
       fallback_url: System.get_env("ETHEREUM_JSONRPC_FALLBACK_HTTP_URL"),
       fallback_trace_url: System.get_env("ETHEREUM_JSONRPC_FALLBACK_TRACE_URL"),

@@ -254,9 +254,14 @@ defmodule Explorer.Chain.Transaction.StateChange do
         {id, balance} <- id_balances do
       balance_before = token_balances_before[address][token_hash][id]
       balance_diff = Decimal.sub(balance, balance_before)
-      transfer = elem(List.first(transfers), 1)
 
-      if transfer.token.type != "ERC-20" or has_diff?(balance_diff) do
+      transfer =
+        case transfers do
+          [first | _] -> elem(first, 1)
+          _ -> nil
+        end
+
+      if transfer && (transfer.token.type != "ERC-20" or has_diff?(balance_diff)) do
         %StateChange{
           coin_or_token_transfers: transfers,
           address: address,

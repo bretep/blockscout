@@ -242,13 +242,13 @@ defmodule BlockScoutWeb.API.V2.TransactionView do
   def prepare_token_transfer_total(token_transfer) do
     case TokensHelper.token_transfer_amount_for_api(token_transfer) do
       {:ok, :erc721_instance} ->
-        %{"token_id" => List.first(token_transfer.token_ids)}
+        %{"token_id" => List.first(token_transfer.token_ids || [])}
 
       {:ok, :erc1155_instance, value, decimals} ->
-        %{"token_id" => List.first(token_transfer.token_ids), "value" => value, "decimals" => decimals}
+        %{"token_id" => List.first(token_transfer.token_ids || []), "value" => value, "decimals" => decimals}
 
       {:ok, :erc1155_instance, values, token_ids, decimals} ->
-        %{"token_id" => List.first(token_ids), "value" => List.first(values), "decimals" => decimals}
+        %{"token_id" => List.first(token_ids || []), "value" => List.first(values || []), "decimals" => decimals}
 
       {:ok, value, decimals} ->
         %{"value" => value, "decimals" => decimals}
@@ -804,9 +804,11 @@ defmodule BlockScoutWeb.API.V2.TransactionView do
 
   defp prepare_state_change(%StateChange{} = state_change) do
     coin_or_transfer =
-      if state_change.coin_or_token_transfers == :coin,
-        do: :coin,
-        else: elem(List.first(state_change.coin_or_token_transfers), 1)
+      case state_change.coin_or_token_transfers do
+        :coin -> :coin
+        [first | _] -> elem(first, 1)
+        _ -> nil
+      end
 
     type = if coin_or_transfer == :coin, do: "coin", else: "token"
 
@@ -815,7 +817,7 @@ defmodule BlockScoutWeb.API.V2.TransactionView do
         Helper.address_with_info(nil, state_change.address, state_change.address && state_change.address.hash, false),
       "is_miner" => state_change.miner?,
       "type" => type,
-      "token" => if(type == "token", do: TokenView.render("token.json", %{token: coin_or_transfer.token})),
+      "token" => if(type == "token" && coin_or_transfer, do: TokenView.render("token.json", %{token: coin_or_transfer.token})),
       "token_id" => state_change.token_id
     }
     |> append_balances(state_change.balance_before, state_change.balance_after)

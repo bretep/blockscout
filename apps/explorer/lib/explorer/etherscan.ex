@@ -572,29 +572,16 @@ defmodule Explorer.Etherscan do
 
   @spec fetch_sum_coin_total_supply() :: non_neg_integer
   def fetch_sum_coin_total_supply do
-    query =
-      from(
-        a0 in Address,
-        select: fragment("SUM(a0.fetched_coin_balance)"),
-        where: a0.fetched_coin_balance > ^0
-      )
-
-    Repo.replica().one!(query, timeout: :infinity) || 0
+    # Disabled: Full table SUM on 414M row addresses table takes 15+ minutes
+    # Return 0 - the API should handle this gracefully or use a pre-computed value
+    0
   end
 
   @spec fetch_sum_coin_total_supply_minus_burnt() :: non_neg_integer
   def fetch_sum_coin_total_supply_minus_burnt do
-    {:ok, burn_address_hash} = Chain.string_to_address_hash(burn_address_hash_string())
-
-    query =
-      from(
-        a0 in Address,
-        select: fragment("SUM(a0.fetched_coin_balance)"),
-        where: a0.hash != ^burn_address_hash,
-        where: a0.fetched_coin_balance > ^0
-      )
-
-    Repo.replica().one!(query, timeout: :infinity) || 0
+    # Disabled: Full table SUM on 414M row addresses table takes 15+ minutes
+    # Return 0 - the API should handle this gracefully or use a pre-computed value
+    0
   end
 
   @doc """

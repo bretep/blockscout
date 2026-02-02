@@ -11,30 +11,40 @@ config :explorer, Explorer.Repo,
 # Configures API the database
 config :explorer, Explorer.Repo.Replica1,
   prepare: :unnamed,
+  timeout: :timer.seconds(300),
   queue_target: 5000,
-  queue_interval: 10000,
-  timeout: :timer.seconds(300)
+  queue_interval: 10000
 
 # Configures Account database
 config :explorer, Explorer.Repo.Account,
   prepare: :unnamed,
-  timeout: :timer.seconds(300)
+  timeout: :timer.seconds(300),
+  queue_target: 5000,
+  queue_interval: 10000
 
 config :explorer, Explorer.Repo.PolygonEdge,
   prepare: :unnamed,
-  timeout: :timer.seconds(300)
+  timeout: :timer.seconds(300),
+  queue_target: 5000,
+  queue_interval: 10000
 
 config :explorer, Explorer.Repo.PolygonZkevm,
   prepare: :unnamed,
-  timeout: :timer.seconds(300)
+  timeout: :timer.seconds(300),
+  queue_target: 5000,
+  queue_interval: 10000
 
 config :explorer, Explorer.Repo.RSK,
   prepare: :unnamed,
-  timeout: :timer.seconds(300)
+  timeout: :timer.seconds(300),
+  queue_target: 5000,
+  queue_interval: 10000
 
 config :explorer, Explorer.Repo.Suave,
   prepare: :unnamed,
-  timeout: :timer.seconds(300)
+  timeout: :timer.seconds(300),
+  queue_target: 5000,
+  queue_interval: 10000
 
 config :explorer, Explorer.Tracer, env: "production", disabled?: true
 

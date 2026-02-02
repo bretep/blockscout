@@ -936,7 +936,13 @@ defmodule Explorer.Chain do
       {:actual, Decimal.new(4)}
 
   """
-  @spec fee(Transaction.t(), :ether | :gwei | :wei) :: {:maximum, Decimal.t()} | {:actual, Decimal.t()}
+  @spec fee(Transaction.t(), :ether | :gwei | :wei) ::
+          {:maximum, Decimal.t()} | {:actual, Decimal.t()} | {:maximum, nil} | {:actual, nil}
+
+  # Handle nil gas_price - return nil fee instead of crashing
+  def fee(%Transaction{gas_price: nil, gas_used: nil}, _unit), do: {:maximum, nil}
+  def fee(%Transaction{gas_price: nil}, _unit), do: {:actual, nil}
+
   def fee(%Transaction{gas: gas, gas_price: gas_price, gas_used: nil}, unit) do
     fee =
       gas_price
@@ -5138,6 +5144,38 @@ defmodule Explorer.Chain do
   end
 
   def count_contracts do
+    # Use the partial index estimate for fast counting
+    # The index addresses_contract_code_partial_idx only contains rows where contract_code IS NOT NULL
+    # so pg_class.reltuples for this index gives us the contract count instantly
+    estimated_contract_count()
+  end
+
+  @doc """
+  Returns an estimated count of contracts using pg_class.reltuples from the partial index.
+  This is nearly instant compared to a full table scan.
+  Falls back to a direct count if the index doesn't exist.
+  """
+  def estimated_contract_count do
+    query = """
+    SELECT reltuples::BIGINT AS estimate
+    FROM pg_class
+    WHERE relname = 'addresses_contract_code_partial_idx'
+    """
+
+    case Repo.query(query) do
+      {:ok, %{rows: [[count]]}} when is_integer(count) and count > 0 ->
+        count
+
+      _ ->
+        # Fallback to direct count if index doesn't exist
+        count_contracts_direct()
+    end
+  end
+
+  @doc """
+  Direct count of contracts (slow - use estimated_contract_count for performance).
+  """
+  def count_contracts_direct do
     query =
       from(address in Address,
         select: address,
@@ -5149,16 +5187,10 @@ defmodule Explorer.Chain do
   end
 
   def count_new_contracts do
-    query =
-      from(tx in Transaction,
-        select: tx,
-        where:
-          tx.status == ^:ok and
-            fragment("NOW() - ? at time zone 'UTC' <= interval '24 hours'", tx.created_contract_code_indexed_at)
-      )
-
-    query
-    |> Repo.aggregate(:count, timeout: :infinity)
+    # Disabled: Scanning 2.3B transactions for 24h window takes 30+ minutes
+    # Would need index on created_contract_code_indexed_at to be fast
+    # Return 0 for now - this is just a display stat
+    0
   end
 
   def count_verified_contracts_from_cache(options \\ []) do

@@ -1638,8 +1638,10 @@ defmodule Explorer.Chain.Transaction do
   def address_transactions_next_page_params(
         %__MODULE__{block_number: block_number, index: index, inserted_at: inserted_at, hash: hash, value: value} = tx
       ) do
+    fee = tx |> Chain.fee(:wei) |> elem(1)
+
     %{
-      "fee" => tx |> Chain.fee(:wei) |> elem(1),
+      "fee" => fee || Decimal.new(0),
       "value" => value,
       "block_number" => block_number,
       "index" => index,

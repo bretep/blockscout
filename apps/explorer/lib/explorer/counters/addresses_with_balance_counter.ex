@@ -102,11 +102,17 @@ defmodule Explorer.Counters.AddressesWithBalanceCounter do
 
   @doc """
   Consolidates the info by populating the `:ets` table with the current database information.
+  Only updates if the new count is >= current count to prevent counts going backwards
+  when multiple backends have different cache refresh times.
   """
   def consolidate do
-    counter = Counters.count_addresses_with_balance()
+    new_counter = Counters.count_addresses_with_balance()
+    current_counter = fetch()
 
-    insert_counter({cache_key(), counter})
+    # Only update if new value is >= current to prevent counts going backwards
+    if new_counter >= current_counter do
+      insert_counter({cache_key(), new_counter})
+    end
   end
 
   @doc """

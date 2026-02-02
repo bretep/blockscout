@@ -1,89 +1,29 @@
 defmodule Explorer.Chain.Cache.GasUsage do
   @moduledoc """
   Cache for total gas usage.
+
+  This module provides the `total/0` function which returns the total gas usage.
+  It uses the incremental GasUsageCounter for efficient updates.
+  Falls back to an estimate based on transaction count when counter is not initialized.
   """
 
-  require Logger
+  alias Explorer.Chain.Cache.GasUsageCounter
+  alias Explorer.Chain.Cache.Helper
 
-  import Ecto.Query,
-    only: [
-      from: 2
-    ]
-
-  config = Application.compile_env(:explorer, __MODULE__)
-  @enabled Keyword.get(config, :enabled)
-
-  use Explorer.Chain.MapCache,
-    name: :gas_usage,
-    key: :sum,
-    key: :async_task,
-    global_ttl: Application.get_env(:explorer, __MODULE__)[:global_ttl],
-    ttl_check_interval: :timer.seconds(1),
-    callback: &async_task_on_deletion(&1)
-
-  alias Explorer.Chain.Transaction
-  alias Explorer.Repo
+  # Average gas per transaction estimate (used for fallback)
+  # Typical EVM transactions range from 21,000 (simple transfer) to 100,000+ (contract calls)
+  @avg_gas_per_tx 65_000
 
   @spec total() :: non_neg_integer()
   def total do
-    cached_value = __MODULE__.get_sum()
+    count = GasUsageCounter.total()
 
-    if is_nil(cached_value) do
-      0
+    # Fall back to estimate based on transaction count if counter is 0
+    if count == 0 do
+      tx_estimate = Helper.estimated_count_from("transactions")
+      max(tx_estimate * @avg_gas_per_tx, 0)
     else
-      cached_value
+      count
     end
-  end
-
-  defp handle_fallback(:sum) do
-    # This will get the task PID if one exists and launch a new task if not
-    # See next `handle_fallback` definition
-    get_async_task()
-
-    {:return, nil}
-  end
-
-  defp handle_fallback(:async_task) do
-    if @enabled do
-      # If this gets called it means an async task was requested, but none exists
-      # so a new one needs to be launched
-      {:ok, task} =
-        Task.start(fn ->
-          try do
-            result = fetch_sum_gas_used()
-
-            set_sum(result)
-          rescue
-            e ->
-              Logger.debug([
-                "Couldn't update gas used sum: ",
-                Exception.format(:error, e, __STACKTRACE__)
-              ])
-          end
-
-          set_async_task(nil)
-        end)
-
-      {:update, task}
-    else
-      {:update, nil}
-    end
-  end
-
-  # By setting this as a `callback` an async task will be started each time the
-  # `sum` expires (unless there is one already running)
-  defp async_task_on_deletion({:delete, _, :sum}), do: get_async_task()
-
-  defp async_task_on_deletion(_data), do: nil
-
-  @spec fetch_sum_gas_used() :: non_neg_integer
-  defp fetch_sum_gas_used do
-    query =
-      from(
-        t0 in Transaction,
-        select: fragment("SUM(t0.gas_used)")
-      )
-
-    Repo.one!(query, timeout: :infinity) || 0
   end
 end

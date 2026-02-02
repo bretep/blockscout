@@ -99,12 +99,18 @@ defmodule Explorer.Chain.Address.Counters do
   end
 
   @doc """
-  Counts the number of all addresses.
-
-  This function should be used with caution. In larger databases, it may take a
-  while to have the return back.
+  Counts the number of all addresses using pg_class estimate for performance.
+  For exact counts (rarely needed), use count_addresses_direct/0.
   """
   def count_addresses do
+    # Use pg_class.reltuples for instant results instead of full table scan
+    CacheHelper.estimated_count_from("addresses")
+  end
+
+  @doc """
+  Direct count of all addresses (slow - avoid in production).
+  """
+  def count_addresses_direct do
     Repo.aggregate(Address, :count, timeout: :infinity)
   end
 
@@ -158,11 +164,39 @@ defmodule Explorer.Chain.Address.Counters do
 
   @doc """
   Counts the number of addresses with fetched coin balance > 0.
-
-  This function should be used with caution. In larger databases, it may take a
-  while to have the return back.
+  Uses pg_class estimate from partial index for performance.
   """
   def count_addresses_with_balance do
+    # Use the partial index addresses_fetched_coin_balance_hash_index
+    # which has predicate (fetched_coin_balance > 0)
+    # Its reltuples gives us the count instantly
+    estimated_addresses_with_balance_count()
+  end
+
+  @doc """
+  Estimated count of addresses with balance > 0 using the partial index.
+  """
+  def estimated_addresses_with_balance_count do
+    query = """
+    SELECT reltuples::BIGINT AS estimate
+    FROM pg_class
+    WHERE relname = 'addresses_fetched_coin_balance_hash_index'
+    """
+
+    case Repo.query(query) do
+      {:ok, %{rows: [[count]]}} when is_integer(count) and count > 0 ->
+        count
+
+      _ ->
+        # Fallback to direct count if index doesn't exist
+        count_addresses_with_balance_direct()
+    end
+  end
+
+  @doc """
+  Direct count of addresses with balance (slow - avoid in production).
+  """
+  def count_addresses_with_balance_direct do
     Repo.one(
       Address.count_with_fetched_coin_balance(),
       timeout: :infinity

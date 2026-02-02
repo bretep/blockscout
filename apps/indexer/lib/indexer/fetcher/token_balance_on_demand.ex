@@ -128,16 +128,16 @@ defmodule Indexer.Fetcher.TokenBalanceOnDemand do
       (updated_erc_1155_ctbs ++ updated_other_ctbs)
       |> Enum.filter(&(!is_nil(&1)))
 
-    {:ok,
-     %{
-       address_current_token_balances: imported_ctbs
-     }} =
-      Chain.import(%{
-        address_current_token_balances: %{
-          params: filtered_current_token_balances_update_params
-        },
-        broadcast: false
-      })
+    imported_ctbs =
+      case Chain.import(%{
+             address_current_token_balances: %{
+               params: filtered_current_token_balances_update_params
+             },
+             broadcast: false
+           }) do
+        {:ok, %{address_current_token_balances: ctbs}} -> ctbs
+        {:ok, %{}} -> []
+      end
 
     Publisher.broadcast(
       %{

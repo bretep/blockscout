@@ -37,6 +37,52 @@ defmodule Explorer.Chain.Address.Counters do
   @typep counter :: non_neg_integer() | nil
 
   @counters_limit 51
+
+  # =============================================================================
+  # PulseChain Optimization: address_counters table lookup
+  #
+  # The address_counters table contains pre-computed transaction counts, token
+  # transfer counts, and gas usage per address. This table is being backfilled
+  # and will eventually replace the slow COUNT queries below.
+  #
+  # Once the backfill is complete and incremental updates are in place, the
+  # fallback queries can be removed entirely.
+  # =============================================================================
+
+  @doc """
+  Looks up pre-computed counters from the address_counters table.
+  Returns nil if the address is not found (not yet backfilled).
+  """
+  def get_address_counters(address_hash) do
+    address_hash_binary = address_hash_to_binary(address_hash)
+
+    query = """
+    SELECT transactions_count, token_transfers_count, gas_used, last_block_number
+    FROM address_counters
+    WHERE address_hash = $1
+    """
+
+    case Repo.query(query, [address_hash_binary]) do
+      {:ok, %{rows: [[tx_count, tt_count, gas_used, _last_block]]}} ->
+        %{
+          transactions_count: tx_count,
+          token_transfers_count: tt_count,
+          gas_used: gas_used
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  defp address_hash_to_binary(%Hash{} = hash), do: hash.bytes
+  defp address_hash_to_binary(hash) when is_binary(hash) do
+    case Hash.Address.cast(hash) do
+      {:ok, %Hash{bytes: bytes}} -> bytes
+      _ -> nil
+    end
+  end
+
   @types [:validations, :txs, :token_transfers, :token_balances, :logs, :withdrawals, :internal_txs]
   @txs_types [:txs_from, :txs_to, :txs_contract]
 
@@ -142,9 +188,17 @@ defmodule Explorer.Chain.Address.Counters do
 
   @spec address_hash_to_transaction_count(Hash.Address.t()) :: non_neg_integer()
   def address_hash_to_transaction_count(address_hash) do
-    query = address_hash_to_transaction_count_query(address_hash)
+    # PulseChain: First try pre-computed counter from address_counters table
+    # TODO: Once backfill is complete, remove the fallback query entirely
+    case get_address_counters(address_hash) do
+      %{transactions_count: count} when is_integer(count) ->
+        count
 
-    Repo.aggregate(query, :count, :hash, timeout: :infinity)
+      _ ->
+        # Fallback to slow query for addresses not yet in address_counters
+        query = address_hash_to_transaction_count_query(address_hash)
+        Repo.aggregate(query, :count, :hash, timeout: :infinity)
+    end
   end
 
   @spec address_to_transaction_count(Address.t()) :: non_neg_integer()
@@ -227,13 +281,22 @@ defmodule Explorer.Chain.Address.Counters do
 
   @spec address_to_outcoming_transaction_gas_usage(Hash.Address.t()) :: Decimal.t() | nil
   def address_to_outcoming_transaction_gas_usage(address_hash) do
-    to_address_query =
-      from(
-        transaction in Transaction,
-        where: transaction.from_address_hash == ^address_hash
-      )
+    # PulseChain: First try pre-computed gas usage from address_counters table
+    # TODO: Once backfill is complete, remove the fallback query entirely
+    case get_address_counters(address_hash) do
+      %{gas_used: gas_used} when not is_nil(gas_used) ->
+        gas_used
 
-    Repo.aggregate(to_address_query, :sum, :gas_used, timeout: :infinity)
+      _ ->
+        # Fallback to slow query for addresses not yet in address_counters
+        from_address_query =
+          from(
+            transaction in Transaction,
+            where: transaction.from_address_hash == ^address_hash
+          )
+
+        Repo.aggregate(from_address_query, :sum, :gas_used, timeout: :infinity)
+    end
   end
 
   def address_to_token_transfer_count_query(address_hash) do
@@ -246,9 +309,17 @@ defmodule Explorer.Chain.Address.Counters do
 
   @spec address_to_token_transfer_count(Address.t()) :: non_neg_integer()
   def address_to_token_transfer_count(address) do
-    query = address_to_token_transfer_count_query(address.hash)
+    # PulseChain: First try pre-computed counter from address_counters table
+    # TODO: Once backfill is complete, remove the fallback query entirely
+    case get_address_counters(address.hash) do
+      %{token_transfers_count: count} when is_integer(count) ->
+        count
 
-    Repo.aggregate(query, :count, timeout: :infinity)
+      _ ->
+        # Fallback to slow query for addresses not yet in address_counters
+        query = address_to_token_transfer_count_query(address.hash)
+        Repo.aggregate(query, :count, timeout: :infinity)
+    end
   end
 
   def address_hash_to_token_balances_query(address_hash) do

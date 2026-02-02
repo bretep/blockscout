@@ -257,6 +257,25 @@ defmodule BlockScoutWeb.API.V2.TokenController do
     |> render(:tokens, %{tokens: tokens, next_page_params: next_page_params})
   end
 
+  @doc """
+  Clears errors for token instances belonging to a contract, allowing them to be re-fetched.
+  This is an admin endpoint for manually triggering metadata refetch.
+
+  POST /api/v2/tokens/:address_hash/instances/refetch
+  """
+  def refetch_instances(conn, %{"address_hash_param" => address_hash_string} = params) do
+    with {:format, {:ok, address_hash}} <- {:format, Chain.string_to_address_hash(address_hash_string)},
+         {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params),
+         {:not_found, true} <- {:not_found, Chain.token_from_address_hash_exists?(address_hash, @api_true)} do
+      {count, _} = Chain.clear_token_instance_errors(address_hash)
+
+      json(conn, %{
+        message: "Cleared errors for #{count} token instances. They will be re-fetched by the TokenInstance.Retry fetcher.",
+        cleared_count: count
+      })
+    end
+  end
+
   defp put_owner(token_instances, holder_address),
     do: Enum.map(token_instances, fn token_instance -> %Instance{token_instance | owner: holder_address} end)
 end

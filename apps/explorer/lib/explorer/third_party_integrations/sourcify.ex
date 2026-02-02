@@ -18,18 +18,24 @@ defmodule Explorer.ThirdPartyIntegrations.Sourcify do
     params = [addresses: address_hash_string, chainIds: chain_id]
     case http_get_request(check_by_address_url(), params) do
       {:error, _} ->
+        # Retry with fallback chain ID on error
         params = [addresses: address_hash_string, chainIds: "1"]
         http_get_request(check_by_address_url(), params)
-    end
 
+      success ->
+        success
+    end
   end
 
   def check_by_address_any(address_hash_string) do
     get_metadata_full_url = get_metadata_any_url() <> "/" <> address_hash_string
     case http_get_request(get_metadata_full_url, []) do
       {:error, _} ->
-        get_metadata_full_url = get_metadata_any_url() <> "/" <> address_hash_string
+        # Retry on error
         http_get_request(get_metadata_full_url, [])
+
+      success ->
+        success
     end
   end
 
@@ -37,8 +43,11 @@ defmodule Explorer.ThirdPartyIntegrations.Sourcify do
     get_metadata_full_url = get_metadata_url() <> "/" <> address_hash_string
     case http_get_request(get_metadata_full_url, []) do
       {:error, _} ->
-        get_metadata_full_url = get_metadata_url() <> "/" <> address_hash_string
+        # Retry on error
         http_get_request(get_metadata_full_url, [])
+
+      success ->
+        success
     end
   end
 
@@ -220,52 +229,72 @@ defmodule Explorer.ThirdPartyIntegrations.Sourcify do
   end
 
   def http_get_request(url, params) do
+    start_time = System.monotonic_time(:microsecond)
     request = HTTPoison.get(url, [], params: params)
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
 
-    case request do
-      {:ok, %Response{body: body, status_code: 200}} ->
-        process_sourcify_response(url, body)
+    result =
+      case request do
+        {:ok, %Response{body: body, status_code: 200}} ->
+          process_sourcify_response(url, body)
 
-      {:ok, %Response{body: body, status_code: status_code}} when status_code in 400..526 ->
-        parse_http_error_response(body)
+        {:ok, %Response{body: body, status_code: status_code}} when status_code in 400..526 ->
+          parse_http_error_response(body)
 
-      {:ok, %Response{status_code: status_code}} when status_code in 300..308 ->
-        {:error, "Sourcify redirected"}
+        {:ok, %Response{status_code: status_code}} when status_code in 300..308 ->
+          {:error, "Sourcify redirected"}
 
-      {:ok, %Response{status_code: _status_code}} ->
-        {:error, "Sourcify unexpected status code"}
+        {:ok, %Response{status_code: _status_code}} ->
+          {:error, "Sourcify unexpected status code"}
 
-      {:error, %Error{reason: reason}} ->
-        {:error, reason}
+        {:error, %Error{reason: reason}} ->
+          {:error, reason}
 
-      _ ->
-        {:error, "Unexpected response from Sourcify"}
-    end
+        _ ->
+          {:error, "Unexpected response from Sourcify"}
+      end
+
+    record_sourcify_metrics(duration, result)
+    result
   end
 
   def http_post_request(url, body) do
+    start_time = System.monotonic_time(:microsecond)
     request = Tesla.post(url, body)
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
 
-    case request do
-      {:ok, %Tesla.Env{body: body}} ->
-        process_sourcify_response(url, body)
+    result =
+      case request do
+        {:ok, %Tesla.Env{body: body}} ->
+          process_sourcify_response(url, body)
 
-      _ ->
-        {:error, "Unexpected response from Sourcify verify method"}
-    end
+        _ ->
+          {:error, "Unexpected response from Sourcify verify method"}
+      end
+
+    record_sourcify_metrics(duration, result)
+    result
   end
 
   def http_post_request_rust_microservice(url, body) do
+    start_time = System.monotonic_time(:microsecond)
+
     request =
       HTTPoison.post(url, Jason.encode!(body), [{"Content-Type", "application/json"}], recv_timeout: @post_timeout)
 
-    case request do
-      {:ok, %Response{body: body, status_code: 200}} ->
-        process_sourcify_response(url, body)
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
 
-      _ ->
-        {:error, "Unexpected response from Sourcify verify method"}
-    end
+    result =
+      case request do
+        {:ok, %Response{body: body, status_code: 200}} ->
+          process_sourcify_response(url, body)
+
+        _ ->
+          {:error, "Unexpected response from Sourcify verify method"}
+      end
+
+    record_sourcify_metrics(duration, result)
+    result
   end
 
   defp process_sourcify_response(url, body) do
@@ -511,4 +540,21 @@ defmodule Explorer.ThirdPartyIntegrations.Sourcify do
   def no_metadata_message, do: @no_metadata_message
 
   def failed_verification_message, do: @failed_verification_message
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_sourcify_metrics(duration_seconds, result) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        status = if match?({:ok, _}, result) or match?({:ok, _, _}, result), do: :success, else: :error
+        Instrumenter.external_api_request(:sourcify, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

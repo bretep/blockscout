@@ -67,8 +67,36 @@ defmodule Explorer.Chain.Fetcher.CheckBytecodeMatchingOnDemand do
 
   @impl true
   def handle_cast({:check, address}, state) do
-    check_bytecode_matching(address)
+    start_time = System.monotonic_time(:microsecond)
+
+    result = check_bytecode_matching(address)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_check_metrics(duration, result)
 
     {:noreply, state}
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_check_metrics(duration_seconds, result) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        status =
+          case result do
+            {:ok, _} -> :success
+            nil -> :skipped
+            _ -> :error
+          end
+
+        Instrumenter.on_demand_fetch(:bytecode_check, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

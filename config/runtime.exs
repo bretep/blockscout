@@ -61,6 +61,16 @@ config :block_scout_web, BlockScoutWeb.Endpoint,
   render_errors: [view: BlockScoutWeb.ErrorView, accepts: ~w(html json)],
   pubsub_server: BlockScoutWeb.PubSub
 
+# NATS configuration for real-time event streaming
+# - Indexer publishes events to NATS (blocks, transactions, etc.)
+# - API servers subscribe to NATS and stream to SSE clients
+# Example: NATS_URL=nats://nats:4222
+config :block_scout_web,
+  nats_url: System.get_env("NATS_URL"),
+  disable_webapp: ConfigHelper.parse_bool_env_var("DISABLE_WEBAPP")
+
+config :explorer, nats_url: System.get_env("NATS_URL")
+
 config :block_scout_web, BlockScoutWeb.Chain,
   network: System.get_env("NETWORK"),
   subnetwork: System.get_env("SUBNETWORK"),
@@ -169,7 +179,11 @@ config :ethereum_jsonrpc, EthereumJSONRPC.PendingTransaction,
   type: System.get_env("ETHEREUM_JSONRPC_PENDING_TRANSACTIONS_TYPE", "default")
 
 config :ethereum_jsonrpc, EthereumJSONRPC.RequestCoordinator,
-  wait_per_timeout: ConfigHelper.parse_time_env_var("ETHEREUM_JSONRPC_WAIT_PER_TIMEOUT", "20s")
+  wait_per_timeout: ConfigHelper.parse_time_env_var("ETHEREUM_JSONRPC_WAIT_PER_TIMEOUT", "20s"),
+  # Global RPC rate limiting per 15-second window
+  # Default 100,000 = ~6,666 req/s which should not interfere with normal operation
+  # Set to 0 to disable entirely
+  throttle_rate_limit: ConfigHelper.parse_integer_env_var("ETHEREUM_JSONRPC_THROTTLE_RATE_LIMIT", 100_000)
 
 ################
 ### Explorer ###
@@ -193,10 +207,12 @@ config :explorer,
       "byzantium,constantinople,petersburg,istanbul,berlin,paris,shanghai,default",
   include_uncles_in_average_block_time: ConfigHelper.parse_bool_env_var("UNCLES_IN_AVERAGE_BLOCK_TIME"),
   healthy_blocks_period: ConfigHelper.parse_time_env_var("HEALTHY_BLOCKS_PERIOD", "5m"),
+  # Use SimpleSender when NATS is configured (for NATS publisher to receive events)
+  # Otherwise fall back to DBSender for postgres NOTIFY on indexer-only mode
   realtime_events_sender:
-    if(disable_webapp?,
-      do: Explorer.Chain.Events.DBSender,
-      else: Explorer.Chain.Events.SimpleSender
+    if(System.get_env("NATS_URL") || !disable_webapp?,
+      do: Explorer.Chain.Events.SimpleSender,
+      else: Explorer.Chain.Events.DBSender
     ),
   enable_caching_implementation_data_of_proxy: true,
   avg_block_time_as_ttl_cached_implementation_data_of_proxy: true,
@@ -208,8 +224,10 @@ config :explorer,
   elasticity_multiplier: ConfigHelper.parse_integer_env_var("EIP_1559_ELASTICITY_MULTIPLIER", 2)
 
 config :explorer, Explorer.Chain.Events.Listener,
+  # Disable postgres NOTIFY listener when NATS is configured
+  # (events come via NATS instead of postgres)
   enabled:
-    if(disable_webapp? && disable_indexer?,
+    if(System.get_env("NATS_URL") || (disable_webapp? && disable_indexer?),
       do: false,
       else: true
     )
@@ -552,7 +570,9 @@ config :indexer, Indexer.Fetcher.EmptyBlocksSanitizer,
   interval: ConfigHelper.parse_time_env_var("INDEXER_EMPTY_BLOCKS_SANITIZER_INTERVAL", "10s")
 
 config :indexer, Indexer.Block.Realtime.Fetcher,
-  max_gap: ConfigHelper.parse_integer_env_var("INDEXER_REALTIME_FETCHER_MAX_GAP", 1000)
+  max_gap: ConfigHelper.parse_integer_env_var("INDEXER_REALTIME_FETCHER_MAX_GAP", 1000),
+  polling_interval: ConfigHelper.parse_integer_env_var("INDEXER_REALTIME_FETCHER_POLLING_INTERVAL", 500),
+  balance_timeout: ConfigHelper.parse_integer_env_var("INDEXER_REALTIME_BALANCE_TIMEOUT", 5000)
 
 config :indexer, Indexer.Block.Catchup.MissingRangesCollector,
   batch_size: ConfigHelper.parse_integer_env_var("INDEXER_CATCHUP_MISSING_RANGES_BATCH_SIZE", 100_000)

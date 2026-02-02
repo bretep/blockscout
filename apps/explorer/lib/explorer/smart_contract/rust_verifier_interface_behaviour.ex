@@ -65,26 +65,69 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
 
       def http_post_request(url, body, is_verification_request? \\ false) do
         headers = [{"Content-Type", "application/json"}]
+        start_time = System.monotonic_time(:microsecond)
+        endpoint = verification_endpoint_from_url(url)
 
-        case HTTPoison.post(url, Jason.encode!(body), maybe_put_api_key_header(headers, is_verification_request?),
-               recv_timeout: @post_timeout
-             ) do
-          {:ok, %Response{body: body, status_code: _}} ->
-            process_verifier_response(body)
+        result =
+          case HTTPoison.post(url, Jason.encode!(body), maybe_put_api_key_header(headers, is_verification_request?),
+                 recv_timeout: @post_timeout
+               ) do
+            {:ok, %Response{body: body, status_code: _}} ->
+              process_verifier_response(body)
 
-          {:error, error} ->
-            old_truncate = Application.get_env(:logger, :truncate)
-            Logger.configure(truncate: :infinity)
+            {:error, error} ->
+              old_truncate = Application.get_env(:logger, :truncate)
+              Logger.configure(truncate: :infinity)
 
-            Logger.error(fn ->
-              [
-                "Error while sending request to verification microservice url: #{url}, body: #{inspect(body, limit: :infinity, printable_limit: :infinity)}: ",
-                inspect(error, limit: :infinity, printable_limit: :infinity)
-              ]
-            end)
+              Logger.error(fn ->
+                [
+                  "Error while sending request to verification microservice url: #{url}, body: #{inspect(body, limit: :infinity, printable_limit: :infinity)}: ",
+                  inspect(error, limit: :infinity, printable_limit: :infinity)
+                ]
+              end)
 
-            Logger.configure(truncate: old_truncate)
-            {:error, @request_error_msg}
+              Logger.configure(truncate: old_truncate)
+              {:error, @request_error_msg}
+          end
+
+        duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+        record_verification_metrics(endpoint, duration, result)
+
+        result
+      end
+
+      defp verification_endpoint_from_url(url) when is_binary(url) do
+        cond do
+          String.contains?(url, "solidity/sources:verify-multi-part") -> :solidity_multi_part
+          String.contains?(url, "solidity/sources:verify-standard-json") -> :solidity_standard_json
+          String.contains?(url, "vyper/sources:verify-multi-part") -> :vyper_multi_part
+          String.contains?(url, "vyper/sources:verify-standard-json") -> :vyper_standard_json
+          String.contains?(url, "solidity/versions") -> :solidity_versions
+          String.contains?(url, "vyper/versions") -> :vyper_versions
+          true -> :unknown
+        end
+      end
+
+      defp record_verification_metrics(endpoint, duration_seconds, result) do
+        alias Explorer.Prometheus.Instrumenter
+
+        if Code.ensure_loaded?(Instrumenter) do
+          try do
+            Instrumenter.verification_microservice_request(endpoint, duration_seconds)
+
+            status = if match?({:ok, _}, result), do: :success, else: :failure
+            Instrumenter.verification_request(endpoint, duration_seconds, status)
+
+            case result do
+              {:error, error} ->
+                Instrumenter.verification_error(endpoint, error)
+
+              _ ->
+                :ok
+            end
+          rescue
+            _ -> :ok
+          end
         end
       end
 
@@ -101,27 +144,36 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
       end
 
       def http_get_request(url) do
-        case HTTPoison.get(url) do
-          {:ok, %Response{body: body, status_code: 200}} ->
-            process_verifier_response(body)
+        start_time = System.monotonic_time(:microsecond)
+        endpoint = verification_endpoint_from_url(url)
 
-          {:ok, %Response{body: body, status_code: _}} ->
-            {:error, body}
+        result =
+          case HTTPoison.get(url) do
+            {:ok, %Response{body: body, status_code: 200}} ->
+              process_verifier_response(body)
 
-          {:error, error} ->
-            old_truncate = Application.get_env(:logger, :truncate)
-            Logger.configure(truncate: :infinity)
+            {:ok, %Response{body: body, status_code: _}} ->
+              {:error, body}
 
-            Logger.error(fn ->
-              [
-                "Error while sending request to verification microservice url: #{url}: ",
-                inspect(error, limit: :infinity, printable_limit: :infinity)
-              ]
-            end)
+            {:error, error} ->
+              old_truncate = Application.get_env(:logger, :truncate)
+              Logger.configure(truncate: :infinity)
 
-            Logger.configure(truncate: old_truncate)
-            {:error, @request_error_msg}
-        end
+              Logger.error(fn ->
+                [
+                  "Error while sending request to verification microservice url: #{url}: ",
+                  inspect(error, limit: :infinity, printable_limit: :infinity)
+                ]
+              end)
+
+              Logger.configure(truncate: old_truncate)
+              {:error, @request_error_msg}
+          end
+
+        duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+        record_verification_metrics(endpoint, duration, result)
+
+        result
       end
 
       def get_versions_list do

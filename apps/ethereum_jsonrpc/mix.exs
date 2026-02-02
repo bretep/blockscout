@@ -68,6 +68,8 @@ defmodule EthereumJsonrpc.MixProject do
       {:finch, "~> 0.18"},
       # Decode/Encode JSON for JSONRPC
       {:jason, "~> 1.3"},
+      # NIF-based JSON parser - runs on dirty schedulers, doesn't block BEAM
+      {:jiffy, "~> 1.1"},
       # Log errors and application output to separate files
       {:logger_file_backend, "~> 0.0.10"},
       # Mocking `EthereumJSONRPC.Transport` and `EthereumJSONRPC.HTTP` so we avoid hitting real chains for local testing

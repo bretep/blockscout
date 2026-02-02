@@ -157,7 +157,7 @@
               text: gettext("Block difficulty for miner, used to calibrate block generation time (Note: constant in POA based networks).") %>
               <%= gettext("Difficulty") %>
             </dt>
-            <dd class="col-sm-9 col-lg-10"><%= @block.difficulty |> Decimal.to_integer() |> BlockScoutWeb.Cldr.Number.to_string! %></dd>
+            <dd class="col-sm-9 col-lg-10"><%= if is_nil(@block.difficulty), do: "N/A", else: @block.difficulty |> Decimal.to_integer() |> BlockScoutWeb.Cldr.Number.to_string! %></dd>
           </dl>
           <%= if block_type(@block) == "Block" do %>
             <!-- Total Difficulty -->
@@ -167,7 +167,7 @@
                 text: gettext("Total difficulty of the chain until this block.") %>
                 <%= gettext("Total Difficulty") %>
               </dt>
-              <dd class="col-sm-9 col-lg-10"><%= @block.total_difficulty |> Decimal.to_integer() |> BlockScoutWeb.Cldr.Number.to_string! %></dd>
+              <dd class="col-sm-9 col-lg-10"><%= if is_nil(@block.total_difficulty), do: "N/A", else: @block.total_difficulty |> Decimal.to_integer() |> BlockScoutWeb.Cldr.Number.to_string! %></dd>
             </dl>
             <!-- Gas Used -->
             <dl class="row">

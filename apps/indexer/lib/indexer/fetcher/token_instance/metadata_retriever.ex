@@ -178,32 +178,40 @@ defmodule Indexer.Fetcher.TokenInstance.MetadataRetriever do
   end
 
   def fetch_metadata_from_uri_inner(uri, hex_token_id) do
-    case Application.get_env(:explorer, :http_adapter).get(uri, [],
-           recv_timeout: 30_000,
-           follow_redirect: true,
-           hackney: [pool: :token_instance_fetcher]
-         ) do
-      {:ok, %Response{body: body, status_code: 200, headers: headers}} ->
-        content_type = get_content_type_from_headers(headers)
+    source = determine_source(uri)
+    start_time = System.monotonic_time(:microsecond)
 
-        check_content_type(content_type, uri, hex_token_id, body)
+    result =
+      case Application.get_env(:explorer, :http_adapter).get(uri, [],
+             recv_timeout: 30_000,
+             follow_redirect: true,
+             hackney: [pool: :token_instance_fetcher]
+           ) do
+        {:ok, %Response{body: body, status_code: 200, headers: headers}} ->
+          content_type = get_content_type_from_headers(headers)
 
-      {:ok, %Response{body: body, status_code: code}} ->
-        Logger.debug(
-          ["Request to token uri: #{inspect(uri)} failed with code #{code}. Body:", inspect(body)],
-          fetcher: :token_instances
-        )
+          check_content_type(content_type, uri, hex_token_id, body)
 
-        {:error_code, code}
+        {:ok, %Response{body: body, status_code: code}} ->
+          Logger.debug(
+            ["Request to token uri: #{inspect(uri)} failed with code #{code}. Body:", inspect(body)],
+            fetcher: :token_instances
+          )
 
-      {:error, %Error{reason: reason}} ->
-        Logger.debug(
-          ["Request to token uri failed: #{inspect(uri)}.", inspect(reason)],
-          fetcher: :token_instances
-        )
+          {:error_code, code}
 
-        {:error, reason |> inspect() |> truncate_error()}
-    end
+        {:error, %Error{reason: reason}} ->
+          Logger.debug(
+            ["Request to token uri failed: #{inspect(uri)}.", inspect(reason)],
+            fetcher: :token_instances
+          )
+
+          {:error, reason |> inspect() |> truncate_error()}
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_fetch_metrics(source, duration, result)
+    result
   rescue
     e ->
       Logger.debug(
@@ -247,7 +255,7 @@ defmodule Indexer.Fetcher.TokenInstance.MetadataRetriever do
   end
 
   defp check_type(json, nil) when is_map(json) do
-    {:ok, %{metadata: json}}
+    {:ok, %{metadata: sanitize_metadata(json)}}
   end
 
   defp check_type(json, hex_token_id) when is_map(json) do
@@ -263,12 +271,25 @@ defmodule Indexer.Fetcher.TokenInstance.MetadataRetriever do
           json
       end
 
-    {:ok, %{metadata: metadata}}
+    {:ok, %{metadata: sanitize_metadata(metadata)}}
   end
 
   defp check_type(_, _) do
     {:error, "wrong metadata type"}
   end
+
+  # Sanitize metadata to remove null bytes (\u0000) that PostgreSQL can't store in text/jsonb
+  defp sanitize_metadata(metadata) when is_map(metadata) do
+    metadata
+    |> Jason.encode!()
+    |> String.replace(~r/\\u0000/, "")  # Remove \u0000 escape sequences
+    |> String.replace(<<0>>, "")         # Remove literal null bytes
+    |> Jason.decode!()
+  rescue
+    _ -> metadata
+  end
+
+  defp sanitize_metadata(metadata), do: metadata
 
   defp substitute_token_id_to_token_uri(token_uri, empty_token_id) when empty_token_id in [nil, ""], do: token_uri
 
@@ -281,4 +302,56 @@ defmodule Indexer.Fetcher.TokenInstance.MetadataRetriever do
   """
   @spec truncate_error(binary()) :: binary()
   def truncate_error(error), do: String.slice(error, 0, @max_error_length)
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp determine_source(uri) when is_binary(uri) do
+    ipfs_gateway = Application.get_env(:indexer, :ipfs_gateway_url) || ""
+
+    cond do
+      String.starts_with?(uri, ipfs_gateway) and ipfs_gateway != "" -> :ipfs
+      String.starts_with?(uri, "data:") -> :data_uri
+      true -> :http
+    end
+  end
+
+  defp determine_source(_), do: :http
+
+  defp record_fetch_metrics(source, duration_seconds, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        status = if match?({:ok, _}, result), do: :success, else: :error
+        Instrumenter.token_metadata_fetch(source, duration_seconds, status)
+
+        case result do
+          {:error, error} when is_binary(error) ->
+            error_type = categorize_error(error)
+            Instrumenter.token_metadata_fetch_error(source, error_type)
+
+          {:error_code, code} ->
+            Instrumenter.token_metadata_fetch_error(source, "http_#{code}")
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
+  end
+
+  defp categorize_error(error) when is_binary(error) do
+    cond do
+      String.contains?(error, "timeout") -> "timeout"
+      String.contains?(error, "econnrefused") -> "connection_refused"
+      String.contains?(error, "nxdomain") -> "dns_error"
+      String.contains?(error, "closed") -> "connection_closed"
+      String.contains?(error, "ssl") -> "ssl_error"
+      true -> "other"
+    end
+  end
 end

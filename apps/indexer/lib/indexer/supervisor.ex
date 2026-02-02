@@ -147,7 +147,8 @@ defmodule Indexer.Supervisor do
         {CoinBalanceDailyUpdater, [[]]},
 
         # Temporary workers
-        {UncatalogedTokenTransfers.Supervisor, [[]]},
+        # DISABLED: UncatalogedTokenTransfers scans ALL logs on every boot - prohibitive for chains with billions of logs
+        # {UncatalogedTokenTransfers.Supervisor, [[]]},
         {UnclesWithoutIndex.Supervisor,
          [[json_rpc_named_arguments: json_rpc_named_arguments, memory_monitor: memory_monitor]]},
         {BlocksTransactionsMismatch.Supervisor,

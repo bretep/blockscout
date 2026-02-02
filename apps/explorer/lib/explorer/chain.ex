@@ -3635,21 +3635,48 @@ defmodule Explorer.Chain do
         ) :: {:ok, accumulator}
         when accumulator: term()
   def stream_token_instances_with_error(initial, reducer, limited? \\ false) when is_function(reducer, 2) do
-    # likely to get valid metadata
-    high_priority = ["request error: 429", ":checkout_timeout", ":econnrefused", ":timeout"]
-    # almost impossible to get valid metadata
-    negative_priority = ["VM execution error", "no uri", "invalid json"]
+    # Only retry transient errors - these indicate temporary failures that may succeed later
+    # All other errors are considered permanent until the contract/metadata is updated
+    retryable_errors = [
+      # Rate limiting - try again later
+      "request error: 429",
+      # Network/connection issues - temporary
+      ":timeout",
+      ":checkout_timeout",
+      ":econnrefused",
+      ":closed",
+      # Server errors - may be temporary
+      "request error: 500",
+      "request error: 502",
+      "request error: 503",
+      "request error: 504"
+    ]
 
     Instance
     |> where([instance], not is_nil(instance.error))
+    |> where([instance], instance.error in ^retryable_errors)
     |> select([instance], %{
       contract_address_hash: instance.token_contract_address_hash,
       token_id: instance.token_id,
       updated_at: instance.updated_at
     })
-    |> order_by([instance], desc: instance.error in ^high_priority, asc: instance.error in ^negative_priority)
     |> add_fetcher_limit(limited?)
     |> Repo.stream_reduce(initial, reducer)
+  end
+
+  @doc """
+  Clears errors for token instances belonging to a specific contract.
+  This allows them to be re-fetched by the TokenInstance fetchers.
+  Used when a contract is verified/updated, indicating the metadata may now be available.
+
+  Returns the number of token instances updated.
+  """
+  @spec clear_token_instance_errors(Hash.Address.t()) :: {non_neg_integer(), nil}
+  def clear_token_instance_errors(contract_address_hash) do
+    Instance
+    |> where([instance], instance.token_contract_address_hash == ^contract_address_hash)
+    |> where([instance], not is_nil(instance.error))
+    |> Repo.update_all(set: [error: nil, updated_at: DateTime.utc_now()])
   end
 
   @doc """

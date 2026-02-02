@@ -59,22 +59,30 @@ defmodule Indexer.Fetcher.TokenUpdater do
 
   @impl BufferedTask
   def run(entries, _json_rpc_named_arguments) do
+    start_time = System.monotonic_time(:microsecond)
+    entry_count = length(entries)
+
     Logger.debug("updating tokens")
 
-    entries
-    |> Enum.map(&to_string/1)
-    |> MetadataRetriever.get_functions_of()
-    |> case do
-      {:ok, params} ->
-        update_metadata(params)
+    result =
+      entries
+      |> Enum.map(&to_string/1)
+      |> MetadataRetriever.get_functions_of()
+      |> case do
+        {:ok, params} ->
+          update_metadata(params)
 
-      other ->
-        Logger.error(fn -> ["failed to update tokens: ", inspect(other)] end,
-          error_count: Enum.count(entries)
-        )
+        other ->
+          Logger.error(fn -> ["failed to update tokens: ", inspect(other)] end,
+            error_count: Enum.count(entries)
+          )
 
-        {:retry, entries}
-    end
+          {:retry, entries}
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_run_metrics(duration, entry_count, result)
+    result
   end
 
   @doc false
@@ -88,9 +96,39 @@ defmodule Indexer.Fetcher.TokenUpdater do
         update_metadata(token, metadata)
       end
     end)
+
+    :ok
   end
 
   def update_metadata(%Token{} = token, metadata) do
     Chain.update_token(token, metadata)
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_run_metrics(duration_seconds, entry_count, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:token_updater, duration_seconds)
+
+        case result do
+          :ok ->
+            Instrumenter.fetcher_items_processed(:token_updater, entry_count)
+
+          {:retry, entries} ->
+            Instrumenter.fetcher_retry(:token_updater, :fetch_error, length(entries))
+            Instrumenter.fetcher_error(:token_updater, :fetch_error)
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

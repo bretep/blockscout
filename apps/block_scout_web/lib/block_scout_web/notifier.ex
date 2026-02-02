@@ -228,6 +228,9 @@ defmodule BlockScoutWeb.Notifier do
     Endpoint.broadcast("tokens:#{to_string(contract_address_hash)}", "token_total_supply", %{token: token})
   end
 
+  # Ignore token_total_supply events when total_supply is nil (nothing to broadcast)
+  def handle_event({:chain_event, :token_total_supply, :on_demand, _tokens}), do: nil
+
   def handle_event({:chain_event, :changed_bytecode, :on_demand, [address_hash]}) do
     Endpoint.broadcast("addresses:#{to_string(address_hash)}", "changed_bytecode", %{})
   end

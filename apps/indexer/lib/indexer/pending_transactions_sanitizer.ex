@@ -2,12 +2,20 @@ defmodule Indexer.PendingTransactionsSanitizer do
   @moduledoc """
   Periodically checks pending transactions status in order to detect that transaction already included to the block
   And we need to re-fetch that block.
+
+  ## Strategy
+
+  1. Delete stale pending transactions (older than 3 hours) without RPC check - they're definitely
+     either confirmed or dropped by now
+  2. Check recent pending transactions (< 3 hours) via RPC to see if they've been confirmed
+  3. Run every 15 minutes to keep the pending transaction pool clean
   """
 
   use GenServer
 
   require Logger
 
+  import Ecto.Query
   import EthereumJSONRPC, only: [json_rpc: 2, request: 1]
   import EthereumJSONRPC.Receipt, only: [to_elixir: 1]
 
@@ -16,8 +24,13 @@ defmodule Indexer.PendingTransactionsSanitizer do
   alias Explorer.Chain.Hash.Full, as: Hash
   alias Explorer.Chain.Import.Runner.Blocks
   alias Explorer.Chain.Transaction
+  alias Explorer.Chain.Wei
 
-  @interval :timer.hours(3)
+  # Run every 15 minutes
+  @interval :timer.minutes(15)
+
+  # Delete pending transactions older than this without RPC check
+  @stale_threshold_hours 3
 
   defstruct interval: @interval,
             json_rpc_named_arguments: []
@@ -54,21 +67,43 @@ defmodule Indexer.PendingTransactionsSanitizer do
         :sanitize_pending_transactions,
         %{interval: interval, json_rpc_named_arguments: json_rpc_named_arguments} = state
       ) do
-    Logger.debug("Start sanitizing of pending transactions",
-      fetcher: :pending_transactions_to_refetch
-    )
+    Logger.info("[PendingTxSanitizer] Starting pending transaction cleanup")
 
-    sanitize_pending_transactions(json_rpc_named_arguments)
+    # Step 1: Delete stale pending transactions (> 3 hours old) without RPC check
+    stale_deleted = delete_stale_pending_transactions()
+    Logger.info("[PendingTxSanitizer] Deleted #{stale_deleted} stale pending transactions (> #{@stale_threshold_hours}h old)")
+
+    # Step 2: Check recent pending transactions via RPC
+    sanitize_recent_pending_transactions(json_rpc_named_arguments)
 
     Process.send_after(self(), :sanitize_pending_transactions, interval)
 
     {:noreply, state}
   end
 
-  defp sanitize_pending_transactions(json_rpc_named_arguments) do
-    pending_transactions_list_from_db = Chain.pending_transactions_list()
+  # Delete pending transactions older than @stale_threshold_hours without checking RPC
+  # These are definitely either confirmed or dropped by now
+  defp delete_stale_pending_transactions do
+    stale_cutoff = DateTime.utc_now() |> DateTime.add(-@stale_threshold_hours * 3600, :second)
 
-    pending_transactions_list_from_db
+    {deleted_count, _} =
+      from(t in Transaction,
+        where: is_nil(t.block_hash),
+        where: t.inserted_at < ^stale_cutoff
+      )
+      |> Repo.delete_all(timeout: :infinity)
+
+    deleted_count
+  end
+
+  # Check recent pending transactions via RPC with a limit
+  defp sanitize_recent_pending_transactions(json_rpc_named_arguments) do
+    recent_pending = get_recent_pending_transactions()
+    count = length(recent_pending)
+
+    Logger.info("[PendingTxSanitizer] Checking #{count} recent pending transactions via RPC")
+
+    recent_pending
     |> Enum.with_index()
     |> Enum.each(fn {pending_tx, ind} ->
       pending_tx_hash_str = "0x" <> Base.encode16(pending_tx.hash.bytes, case: :lower)
@@ -81,18 +116,29 @@ defmodule Indexer.PendingTransactionsSanitizer do
           fetch_block_and_invalidate_wrapper(pending_tx, pending_tx_hash_str, result)
         else
           Logger.debug(
-            "Transaction with hash #{pending_tx_hash_str} doesn't exist in the node anymore. We should remove it from Blockscout DB.",
+            "[PendingTxSanitizer] Transaction #{pending_tx_hash_str} not found in node, deleting",
             fetcher: :pending_transactions_to_refetch
           )
 
-          fetch_pending_transaction_and_delete(pending_tx)
+          delete_pending_transaction(pending_tx)
         end
       end
     end)
 
-    Logger.debug("Pending transactions are sanitized",
-      fetcher: :pending_transactions_to_refetch
+    Logger.info("[PendingTxSanitizer] Finished checking recent pending transactions")
+  end
+
+  # Get recent pending transactions (< @stale_threshold_hours old)
+  defp get_recent_pending_transactions do
+    stale_cutoff = DateTime.utc_now() |> DateTime.add(-@stale_threshold_hours * 3600, :second)
+
+    from(t in Transaction,
+      where: is_nil(t.block_hash),
+      where: t.inserted_at >= ^stale_cutoff,
+      where: is_nil(t.error) or t.error != "dropped/replaced",
+      order_by: [asc: t.inserted_at]
     )
+    |> Repo.all(timeout: :infinity)
   end
 
   defp fetch_block_and_invalidate_wrapper(pending_tx, pending_tx_hash_str, result) do
@@ -100,20 +146,20 @@ defmodule Indexer.PendingTransactionsSanitizer do
 
     if block_hash do
       Logger.debug(
-        "Transaction with hash #{pending_tx_hash_str} already included into the block #{block_hash}. We should invalidate consensus for it in order to re-fetch transactions",
+        "[PendingTxSanitizer] Transaction #{pending_tx_hash_str} confirmed in block #{block_hash}",
         fetcher: :pending_transactions_to_refetch
       )
 
       fetch_block_and_invalidate(block_hash, pending_tx, result)
     else
       Logger.debug(
-        "Transaction with hash #{pending_tx_hash_str} is still pending. Do nothing.",
+        "[PendingTxSanitizer] Transaction #{pending_tx_hash_str} still pending",
         fetcher: :pending_transactions_to_refetch
       )
     end
   end
 
-  defp fetch_pending_transaction_and_delete(transaction) do
+  defp delete_pending_transaction(transaction) do
     pending_tx_hash_str = "0x" <> Base.encode16(transaction.hash.bytes, case: :lower)
 
     case transaction
@@ -121,16 +167,13 @@ defmodule Indexer.PendingTransactionsSanitizer do
          |> Repo.delete() do
       {:ok, _transaction} ->
         Logger.debug(
-          "Transaction with hash #{pending_tx_hash_str} successfully deleted from Blockscout DB because it doesn't exist in the archive node anymore",
+          "[PendingTxSanitizer] Deleted #{pending_tx_hash_str}",
           fetcher: :pending_transactions_to_refetch
         )
 
       {:error, changeset} ->
-        Logger.debug(
-          [
-            "Deletion of pending transaction with hash #{pending_tx_hash_str} from Blockscout DB failed",
-            inspect(changeset)
-          ],
+        Logger.warning(
+          "[PendingTxSanitizer] Failed to delete #{pending_tx_hash_str}: #{inspect(changeset)}",
           fetcher: :pending_transactions_to_refetch
         )
     end
@@ -140,7 +183,7 @@ defmodule Indexer.PendingTransactionsSanitizer do
     case Chain.fetch_block_by_hash(block_hash) do
       %{number: number, consensus: consensus} ->
         Logger.debug(
-          "Corresponding number of the block with hash #{block_hash} to invalidate is #{number} and consensus #{consensus}",
+          "[PendingTxSanitizer] Block #{block_hash} found: number=#{number}, consensus=#{consensus}",
           fetcher: :pending_transactions_to_refetch
         )
 
@@ -148,7 +191,7 @@ defmodule Indexer.PendingTransactionsSanitizer do
 
       _ ->
         Logger.debug(
-          "Block with hash #{block_hash} is not yet in the DB",
+          "[PendingTxSanitizer] Block #{block_hash} not yet in DB",
           fetcher: :pending_transactions_to_refetch
         )
     end
@@ -161,6 +204,10 @@ defmodule Indexer.PendingTransactionsSanitizer do
       {:ok, hash} = Hash.cast(block_hash)
       tx_info = to_elixir(tx)
 
+      # Get gas_price from receipt's effectiveGasPrice or fall back to pending tx's gas_price
+      # This is required because the collated_gas_price constraint requires gas_price when block_hash is set
+      gas_price = get_gas_price(tx_info, pending_tx)
+
       changeset =
         pending_tx
         |> Transaction.changeset()
@@ -169,12 +216,36 @@ defmodule Indexer.PendingTransactionsSanitizer do
         |> Changeset.put_change(:index, tx_info["transactionIndex"])
         |> Changeset.put_change(:block_number, block_number)
         |> Changeset.put_change(:block_hash, hash)
+        |> maybe_put_gas_price(gas_price)
 
       Repo.update(changeset)
 
       Logger.debug(
-        "Pending tx with hash #{"0x" <> Base.encode16(pending_tx.hash.bytes, case: :lower)} assigned to block ##{block_number} with hash #{block_hash}"
+        "[PendingTxSanitizer] Assigned pending tx to block ##{block_number}"
       )
     end
   end
+
+  # Get gas_price from receipt's effectiveGasPrice (for EIP-1559 txs) or use existing gas_price
+  defp get_gas_price(tx_info, pending_tx) do
+    case tx_info["effectiveGasPrice"] do
+      nil ->
+        # Fall back to pending transaction's gas_price
+        pending_tx.gas_price
+
+      effective_gas_price when is_binary(effective_gas_price) ->
+        # Parse hex string and wrap in Wei struct
+        {value, _} = Integer.parse(String.replace_leading(effective_gas_price, "0x", ""), 16)
+        %Wei{value: Decimal.new(value)}
+
+      effective_gas_price when is_integer(effective_gas_price) ->
+        %Wei{value: Decimal.new(effective_gas_price)}
+
+      _ ->
+        pending_tx.gas_price
+    end
+  end
+
+  defp maybe_put_gas_price(changeset, nil), do: changeset
+  defp maybe_put_gas_price(changeset, gas_price), do: Changeset.put_change(changeset, :gas_price, gas_price)
 end

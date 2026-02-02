@@ -1,6 +1,6 @@
 defmodule Indexer.Block.Realtime.Fetcher do
   @moduledoc """
-  Fetches and indexes block ranges from latest block forward using a WebSocket.
+  Fetches and indexes block ranges from latest block forward using polling.
   """
 
   use GenServer
@@ -41,7 +41,8 @@ defmodule Indexer.Block.Realtime.Fetcher do
 
   @behaviour Block.Fetcher
 
-  @minimum_safe_polling_period :timer.seconds(1)
+  # Configurable via INDEXER_REALTIME_FETCHER_POLLING_INTERVAL (in ms), default 500ms
+  @default_polling_period 500
 
   @shutdown_after :timer.minutes(1)
 
@@ -177,15 +178,12 @@ defmodule Indexer.Block.Realtime.Fetcher do
   defp subscribe_to_new_heads(state, _), do: state
 
   defp schedule_polling do
-    polling_period =
-      case AverageBlockTime.average_block_time() do
-        {:error, :disabled} -> 2_000
-        block_time -> min(round(Duration.to_milliseconds(block_time) / 2), 30_000)
-      end
+    polling_period = polling_interval()
+    Process.send_after(self(), :poll_latest_block_number, polling_period)
+  end
 
-    safe_polling_period = max(polling_period, @minimum_safe_polling_period)
-
-    Process.send_after(self(), :poll_latest_block_number, safe_polling_period)
+  defp polling_interval do
+    Application.get_env(:indexer, __MODULE__)[:polling_interval] || @default_polling_period
   end
 
   @import_options ~w(address_hash_to_fetched_balance_block_number)a
@@ -243,6 +241,27 @@ defmodule Indexer.Block.Realtime.Fetcher do
   def start_fetch_and_import(number, block_fetcher, previous_number) do
     start_at = determine_start_at(number, previous_number)
     is_reorg = reorg?(number, previous_number)
+
+    # Track metrics
+    Prometheus.Instrumenter.realtime_block_detected()
+    Prometheus.Instrumenter.realtime_last_block(number)
+
+    if previous_number do
+      Prometheus.Instrumenter.realtime_previous_block(previous_number)
+    end
+
+    if is_reorg do
+      Prometheus.Instrumenter.realtime_reorg_detected()
+      Logger.info("Reorg detected: current=#{number}, previous=#{previous_number}")
+    end
+
+    # Track gap blocks (blocks between previous and current that need fetching)
+    gap_count = max(0, number - start_at)
+    Prometheus.Instrumenter.realtime_gap_blocks(gap_count)
+
+    if gap_count > 0 do
+      Logger.info("Fetching #{gap_count + 1} blocks: #{start_at}..#{number}")
+    end
 
     for block_number_to_fetch <- start_at..number do
       args = [block_number_to_fetch, block_fetcher, is_reorg]
@@ -316,14 +335,18 @@ defmodule Indexer.Block.Realtime.Fetcher do
       :timer.tc(fn -> fetch_and_import_range(block_fetcher, block_number_to_fetch..block_number_to_fetch) end)
 
     Prometheus.Instrumenter.block_full_process(fetch_duration, __MODULE__)
+    # Record duration in seconds for the histogram
+    Prometheus.Instrumenter.realtime_fetch_duration(fetch_duration / 1_000_000)
 
     case result do
       {:ok, %{inserted: inserted, errors: []}} ->
+        Prometheus.Instrumenter.realtime_block_success()
         log_import_timings(inserted, fetch_duration, time_before)
         MissingRangesManipulator.clear_batch([block_number_to_fetch..block_number_to_fetch])
         Logger.debug("Fetched and imported.")
 
       {:ok, %{inserted: _, errors: [_ | _] = errors}} ->
+        Prometheus.Instrumenter.realtime_block_failure(:partial_errors, :import)
         Logger.error(fn ->
           [
             "failed to fetch block: ",
@@ -334,6 +357,7 @@ defmodule Indexer.Block.Realtime.Fetcher do
 
       {:error, {:import = step, [%Changeset{} | _] = changesets}} ->
         Prometheus.Instrumenter.import_errors()
+        Prometheus.Instrumenter.realtime_block_failure(:validation_error, step)
 
         params = %{
           changesets: changesets,
@@ -359,9 +383,11 @@ defmodule Indexer.Block.Realtime.Fetcher do
 
       {:error, {:import = step, reason}} ->
         Prometheus.Instrumenter.import_errors()
+        Prometheus.Instrumenter.realtime_block_failure(:import_error, step)
         Logger.error(fn -> inspect(reason) end, step: step)
 
       {:error, {step, reason}} ->
+        Prometheus.Instrumenter.realtime_block_failure(:fetch_error, step)
         Logger.error(
           fn ->
             [
@@ -374,6 +400,7 @@ defmodule Indexer.Block.Realtime.Fetcher do
         )
 
       {:error, {step, failed_value, _changes_so_far}} ->
+        Prometheus.Instrumenter.realtime_block_failure(:insert_error, step)
         Logger.error(
           fn ->
             [
@@ -433,13 +460,22 @@ defmodule Indexer.Block.Realtime.Fetcher do
     async_import_replaced_transactions(imported)
   end
 
+  # Default 5 second timeout for realtime balance fetches
+  # Balance fetches should be <1ms, so 5s is very generous
+  # Fail fast and let catchup retry rather than blocking realtime indexer
+  @realtime_balance_timeout_ms 5_000
+
   defp balances(
          %Block.Fetcher{json_rpc_named_arguments: json_rpc_named_arguments},
          %{addresses_params: addresses_params} = options
        ) do
+    # Apply shorter timeout for realtime balance fetches
+    realtime_timeout = Application.get_env(:indexer, __MODULE__)[:balance_timeout] || @realtime_balance_timeout_ms
+    json_rpc_with_timeout = apply_realtime_timeout(json_rpc_named_arguments, realtime_timeout)
+
     case options
          |> fetch_balances_params_list()
-         |> EthereumJSONRPC.fetch_balances(json_rpc_named_arguments, CoinBalance.batch_size()) do
+         |> EthereumJSONRPC.fetch_balances(json_rpc_with_timeout, CoinBalance.batch_size()) do
       {:ok, %FetchedBalances{params_list: params_list, errors: []}} ->
         merged_addresses_params =
           %{address_coin_balances: params_list}
@@ -507,5 +543,12 @@ defmodule Indexer.Block.Realtime.Fetcher do
     Enum.into(balances_params, MapSet.new(), fn %{address_hash: address_hash, block_number: block_number} ->
       %{hash_data: address_hash, block_quantity: integer_to_quantity(block_number)}
     end)
+  end
+
+  # Apply a shorter timeout for realtime fetches to fail fast
+  defp apply_realtime_timeout(json_rpc_named_arguments, timeout_ms) do
+    json_rpc_named_arguments
+    |> put_in([:transport_options, :http_options, :timeout], timeout_ms)
+    |> put_in([:transport_options, :http_options, :recv_timeout], timeout_ms)
   end
 end

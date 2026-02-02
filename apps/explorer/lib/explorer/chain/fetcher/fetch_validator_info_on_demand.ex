@@ -81,8 +81,30 @@ defmodule Explorer.Chain.Fetcher.FetchValidatorInfoOnDemand do
 
   @impl true
   def handle_cast({:fetch_or_update, address_hash}, state) do
-    actualize_validator_info(address_hash)
+    start_time = System.monotonic_time(:microsecond)
+
+    result = actualize_validator_info(address_hash)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_fetch_metrics(duration, result)
 
     {:noreply, state}
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_fetch_metrics(duration_seconds, result) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        status = if result == :ignore, do: :skipped, else: :success
+        Instrumenter.on_demand_fetch(:validator_info, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

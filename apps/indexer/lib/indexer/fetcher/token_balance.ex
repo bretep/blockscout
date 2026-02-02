@@ -94,6 +94,9 @@ defmodule Indexer.Fetcher.TokenBalance do
   @impl BufferedTask
   @decorate trace(name: "fetch", resource: "Indexer.Fetcher.TokenBalance.run/2", tracer: Tracer, service: :indexer)
   def run(entries, _json_rpc_named_arguments) do
+    start_time = System.monotonic_time(:microsecond)
+    entry_count = length(entries)
+
     result =
       entries
       |> Enum.map(&format_params/1)
@@ -101,11 +104,10 @@ defmodule Indexer.Fetcher.TokenBalance do
       |> fetch_from_blockchain()
       |> import_token_balances()
 
-    if result == :ok do
-      :ok
-    else
-      {:retry, entries}
-    end
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    final_result = if result == :ok, do: :ok, else: {:retry, entries}
+    record_run_metrics(duration, entry_count, final_result)
+    final_result
   end
 
   def fetch_from_blockchain(params_list) do
@@ -245,5 +247,33 @@ defmodule Indexer.Fetcher.TokenBalance do
       max_concurrency: Application.get_env(:indexer, __MODULE__)[:concurrency] || @default_max_concurrency,
       task_supervisor: Indexer.Fetcher.TokenBalance.TaskSupervisor
     ]
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_run_metrics(duration_seconds, entry_count, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:token_balance, duration_seconds)
+
+        case result do
+          :ok ->
+            Instrumenter.fetcher_items_processed(:token_balance, entry_count)
+
+          {:retry, entries} ->
+            Instrumenter.fetcher_retry(:token_balance, :fetch_error, length(entries))
+            Instrumenter.fetcher_error(:token_balance, :fetch_error)
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

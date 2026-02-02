@@ -115,22 +115,29 @@ defmodule Explorer.ExchangeRates.Source do
   end
 
   def http_request(source_url, additional_headers) do
-    case HTTPoison.get(source_url, headers() ++ additional_headers) do
-      {:ok, %Response{body: body, status_code: 200}} ->
-        parse_http_success_response(body)
+    start_time = System.monotonic_time(:microsecond)
 
-      {:ok, %Response{body: body, status_code: status_code}} when status_code in 400..526 ->
-        parse_http_error_response(body)
+    result =
+      case HTTPoison.get(source_url, headers() ++ additional_headers) do
+        {:ok, %Response{body: body, status_code: 200}} ->
+          parse_http_success_response(body)
 
-      {:ok, %Response{status_code: status_code}} when status_code in 300..308 ->
-        {:error, "Source redirected"}
+        {:ok, %Response{body: body, status_code: status_code}} when status_code in 400..526 ->
+          parse_http_error_response(body)
 
-      {:ok, %Response{status_code: _status_code}} ->
-        {:error, "Source unexpected status code"}
+        {:ok, %Response{status_code: status_code}} when status_code in 300..308 ->
+          {:error, "Source redirected"}
 
-      {:error, %Error{reason: reason}} ->
-        {:error, reason}
-    end
+        {:ok, %Response{status_code: _status_code}} ->
+          {:error, "Source unexpected status code"}
+
+        {:error, %Error{reason: reason}} ->
+          {:error, reason}
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_exchange_rate_metrics(duration, result)
+    result
   end
 
   defp parse_http_success_response(body) do
@@ -146,6 +153,23 @@ defmodule Explorer.ExchangeRates.Source do
       {:error, body_json["error"]}
     else
       {:error, body}
+    end
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_exchange_rate_metrics(duration_seconds, result) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        status = if match?({:ok, _}, result), do: :success, else: :error
+        Instrumenter.external_api_request(:exchange_rate, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
     end
   end
 end

@@ -81,6 +81,8 @@ defmodule Indexer.Fetcher.UncleBlock do
   @impl BufferedTask
   @decorate trace(name: "fetch", resource: "Indexer.Fetcher.UncleBlock.run/2", service: :indexer, tracer: Tracer)
   def run(entries, %Block.Fetcher{json_rpc_named_arguments: json_rpc_named_arguments} = block_fetcher) do
+    start_time = System.monotonic_time(:microsecond)
+
     unique_entries = Enum.uniq(entries)
 
     entry_count = Enum.count(unique_entries)
@@ -88,23 +90,28 @@ defmodule Indexer.Fetcher.UncleBlock do
 
     Logger.debug("fetching")
 
-    unique_entries
-    |> Enum.map(&entry_to_params/1)
-    |> EthereumJSONRPC.fetch_uncle_blocks(json_rpc_named_arguments)
-    |> case do
-      {:ok, blocks} ->
-        run_blocks(blocks, block_fetcher, unique_entries)
+    result =
+      unique_entries
+      |> Enum.map(&entry_to_params/1)
+      |> EthereumJSONRPC.fetch_uncle_blocks(json_rpc_named_arguments)
+      |> case do
+        {:ok, blocks} ->
+          run_blocks(blocks, block_fetcher, unique_entries)
 
-      {:error, reason} ->
-        Logger.error(
-          fn ->
-            ["failed to fetch: ", inspect(reason)]
-          end,
-          error_count: entry_count
-        )
+        {:error, reason} ->
+          Logger.error(
+            fn ->
+              ["failed to fetch: ", inspect(reason)]
+            end,
+            error_count: entry_count
+          )
 
-        {:retry, unique_entries}
-    end
+          {:retry, unique_entries}
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_run_metrics(duration, entry_count, result)
+    result
   end
 
   defp entry_to_params({nephew_hash_bytes, index}) when is_integer(index) do
@@ -279,5 +286,33 @@ defmodule Indexer.Fetcher.UncleBlock do
   defp error_to_iodata(%{code: code, message: message, data: %{nephew_hash: hash}})
        when is_integer(code) and is_binary(message) and is_binary(hash) do
     [hash, ": (", to_string(code), ") ", message, ?\n]
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_run_metrics(duration_seconds, entry_count, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:uncle_block, duration_seconds)
+
+        case result do
+          :ok ->
+            Instrumenter.fetcher_items_processed(:uncle_block, entry_count)
+
+          {:retry, entries} ->
+            Instrumenter.fetcher_retry(:uncle_block, :fetch_error, length(entries))
+            Instrumenter.fetcher_error(:uncle_block, :fetch_error)
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

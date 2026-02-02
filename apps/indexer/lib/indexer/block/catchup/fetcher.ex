@@ -48,6 +48,7 @@ defmodule Indexer.Block.Catchup.Fetcher do
 
     case MissingRangesManipulator.get_latest_batch() do
       [] ->
+        Prometheus.Instrumenter.catchup_blocks_remaining(0)
         %{
           first_block_number: nil,
           last_block_number: nil,
@@ -58,32 +59,51 @@ defmodule Indexer.Block.Catchup.Fetcher do
       latest_missing_ranges ->
         missing_ranges = filter_consensus_blocks(latest_missing_ranges)
 
-        first.._ = List.first(missing_ranges)
-        _..last = List.last(missing_ranges)
+        # Handle case where all ranges were filtered out (all blocks have consensus)
+        case missing_ranges do
+          [] ->
+            Prometheus.Instrumenter.catchup_blocks_remaining(0)
+            %{
+              first_block_number: nil,
+              last_block_number: nil,
+              missing_block_count: 0,
+              shrunk: false
+            }
 
-        Logger.metadata(first_block_number: first, last_block_number: last)
+          _ ->
+            first.._ = List.first(missing_ranges)
+            _..last = List.last(missing_ranges)
 
-        missing_block_count =
-          missing_ranges
-          |> Stream.map(&Enum.count/1)
-          |> Enum.sum()
+            Logger.metadata(first_block_number: first, last_block_number: last)
 
-        step = step(first, last, blocks_batch_size())
-        sequence_opts = put_memory_monitor([ranges: missing_ranges, step: step], state)
-        gen_server_opts = [name: @sequence_name]
-        {:ok, sequence} = Sequence.start_link(sequence_opts, gen_server_opts)
-        Sequence.cap(sequence)
+            missing_block_count =
+              missing_ranges
+              |> Stream.map(&Enum.count/1)
+              |> Enum.sum()
 
-        stream_fetch_and_import(state, sequence)
+            # Track catchup metrics
+            Prometheus.Instrumenter.catchup_blocks_remaining(missing_block_count)
+            Prometheus.Instrumenter.missing_ranges_stats(length(missing_ranges), last, first)
 
-        shrunk = Shrinkable.shrunk?(sequence)
+            Logger.info("Catchup starting: #{missing_block_count} blocks in #{length(missing_ranges)} ranges (#{last}..#{first})")
 
-        %{
-          first_block_number: first,
-          last_block_number: last,
-          missing_block_count: missing_block_count,
-          shrunk: shrunk
-        }
+            step = step(first, last, blocks_batch_size())
+            sequence_opts = put_memory_monitor([ranges: missing_ranges, step: step], state)
+            gen_server_opts = [name: @sequence_name]
+            {:ok, sequence} = Sequence.start_link(sequence_opts, gen_server_opts)
+            Sequence.cap(sequence)
+
+            stream_fetch_and_import(state, sequence)
+
+            shrunk = Shrinkable.shrunk?(sequence)
+
+            %{
+              first_block_number: first,
+              last_block_number: last,
+              missing_block_count: missing_block_count,
+              shrunk: shrunk
+            }
+        end
     end
   end
 
@@ -195,6 +215,10 @@ defmodule Indexer.Block.Catchup.Fetcher do
     {fetch_duration, result} = :timer.tc(fn -> fetch_and_import_range(block_fetcher, range) end)
 
     Prometheus.Instrumenter.block_full_process(fetch_duration, __MODULE__)
+    Prometheus.Instrumenter.catchup_batch_duration(fetch_duration / 1_000_000)
+    Prometheus.Instrumenter.catchup_batch_processed()
+
+    block_count = abs(last - first) + 1
 
     case result do
       {:ok, %{inserted: inserted, errors: errors}} ->
@@ -202,10 +226,18 @@ defmodule Indexer.Block.Catchup.Fetcher do
         retry(sequence, errors)
         clear_missing_ranges(range, errors)
 
+        success_count = block_count - length(errors)
+        Prometheus.Instrumenter.catchup_block_success(success_count)
+
+        if length(errors) > 0 do
+          Prometheus.Instrumenter.catchup_block_failure(:partial_errors)
+        end
+
         {:ok, inserted: inserted}
 
       {:error, {:import = step, [%Changeset{} | _] = changesets}} = error ->
         Prometheus.Instrumenter.import_errors()
+        Prometheus.Instrumenter.catchup_block_failure(:validation_error)
         Logger.error(fn -> ["failed to validate: ", inspect(changesets), ". Retrying."] end, step: step)
 
         push_back(sequence, range)
@@ -214,6 +246,7 @@ defmodule Indexer.Block.Catchup.Fetcher do
 
       {:error, {:import = step, reason}} = error ->
         Prometheus.Instrumenter.import_errors()
+        Prometheus.Instrumenter.catchup_block_failure(:import_error)
         Logger.error(fn -> [inspect(reason), ". Retrying."] end, step: step)
 
         push_back(sequence, range)
@@ -221,6 +254,7 @@ defmodule Indexer.Block.Catchup.Fetcher do
         error
 
       {:error, {step, reason}} = error ->
+        Prometheus.Instrumenter.catchup_block_failure(:fetch_error)
         Logger.error(
           fn ->
             ["failed to fetch: ", inspect(reason), ". Retrying."]
@@ -233,6 +267,7 @@ defmodule Indexer.Block.Catchup.Fetcher do
         error
 
       {:error, {step, failed_value, _changes_so_far}} = error ->
+        Prometheus.Instrumenter.catchup_block_failure(:insert_error)
         Logger.error(
           fn ->
             ["failed to insert: ", inspect(failed_value), ". Retrying."]
@@ -246,6 +281,7 @@ defmodule Indexer.Block.Catchup.Fetcher do
     end
   rescue
     exception ->
+      Prometheus.Instrumenter.catchup_block_failure(:exception)
       Logger.error(fn -> [Exception.format(:error, exception, __STACKTRACE__), ?\n, ?\n, "Retrying."] end)
       {:error, exception}
   end

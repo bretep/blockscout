@@ -76,9 +76,13 @@ defmodule Explorer.Counters.AddressTokenUsdSum do
   end
 
   defp update_cache(address_hash_string, token_balances) do
+    start_time = System.monotonic_time(:microsecond)
     put_into_cache("hash_#{address_hash_string}_#{@last_update_key}", Helper.current_time())
     new_data = address_tokens_fiat_sum(token_balances)
     put_into_cache("hash_#{address_hash_string}", new_data)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_cache_update_metrics(duration)
   end
 
   defp fetch_from_cache(key) do
@@ -94,4 +98,20 @@ defmodule Explorer.Counters.AddressTokenUsdSum do
   end
 
   defp enable_consolidation?, do: @enable_consolidation
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_cache_update_metrics(duration_seconds) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:address_tokens_usd_sum, :on_demand, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

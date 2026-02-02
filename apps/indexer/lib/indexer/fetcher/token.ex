@@ -51,12 +51,18 @@ defmodule Indexer.Fetcher.Token do
   @impl BufferedTask
   @decorate trace(name: "fetch", resource: "Indexer.Fetcher.Token.run/2", service: :indexer, tracer: Tracer)
   def run([token_contract_address], _json_rpc_named_arguments) do
+    start_time = System.monotonic_time(:microsecond)
     options = [necessity_by_association: %{[contract_address: :smart_contract] => :optional}]
 
-    case Chain.token_from_address_hash(token_contract_address, options) do
-      {:ok, %Token{} = token} ->
-        catalog_token(token)
-    end
+    result =
+      case Chain.token_from_address_hash(token_contract_address, options) do
+        {:ok, %Token{} = token} ->
+          catalog_token(token)
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_run_metrics(duration, result)
+    result
   end
 
   @doc """
@@ -84,5 +90,26 @@ defmodule Indexer.Fetcher.Token do
       max_concurrency: Application.get_env(:indexer, __MODULE__)[:concurrency] || @default_max_concurrency,
       task_supervisor: Indexer.Fetcher.Token.TaskSupervisor
     ]
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_run_metrics(duration_seconds, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:token, duration_seconds)
+
+        case result do
+          :ok -> Instrumenter.fetcher_items_processed(:token, 1)
+          _ -> Instrumenter.fetcher_error(:token, :catalog_error)
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

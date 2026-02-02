@@ -128,7 +128,10 @@ defmodule EthereumJSONRPC.RequestCoordinator do
   end
 
   defp inc_throttle_table do
-    if config(:throttle_rolling_window_opts) do
+    rate_limit = config(:throttle_rate_limit)
+
+    # Only track requests if throttling is enabled (rate_limit > 0)
+    if rate_limit && rate_limit > 0 && config(:throttle_rolling_window_opts) do
       RollingWindow.inc(throttle_table(), @throttle_key)
     end
   end
@@ -138,9 +141,9 @@ defmodule EthereumJSONRPC.RequestCoordinator do
          rate_limit \\ config(:throttle_rate_limit),
          opts \\ config(:throttle_rolling_window_opts)
        ) do
-    # Bug fix: was checking opts[:throttle_rate_limit] which is always nil
-    # Should check rate_limit parameter instead
-    if rate_limit && opts && RollingWindow.count(throttle_table(), @throttle_key) >= rate_limit do
+    # rate_limit of 0 or nil means throttling is disabled
+    # Only throttle if rate_limit > 0 and the count exceeds the limit
+    if rate_limit && rate_limit > 0 && opts && RollingWindow.count(throttle_table(), @throttle_key) >= rate_limit do
       if opts[:duration] >= remaining_time do
         :timer.sleep(remaining_time)
 

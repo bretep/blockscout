@@ -101,34 +101,70 @@ defmodule Indexer.Fetcher.ReplacedTransaction do
               tracer: Tracer
             )
   def run(entries, _) do
+    start_time = System.monotonic_time(:microsecond)
+    entry_count = length(entries)
+
     Logger.debug("fetching replaced transactions for transactions")
 
-    try do
-      {pending, realtime} =
-        entries
-        |> Enum.split_with(fn entry ->
-          match?({:pending, _, _, _}, entry)
-        end)
+    result =
+      try do
+        {pending, realtime} =
+          entries
+          |> Enum.split_with(fn entry ->
+            match?({:pending, _, _, _}, entry)
+          end)
 
-      pending
-      |> Enum.map(&pending_params/1)
-      |> Chain.find_and_update_replaced_transactions()
+        pending
+        |> Enum.map(&pending_params/1)
+        |> Chain.find_and_update_replaced_transactions()
 
-      realtime
-      |> Enum.map(&params/1)
-      |> Chain.update_replaced_transactions()
+        realtime
+        |> Enum.map(&params/1)
+        |> Chain.update_replaced_transactions()
 
-      :ok
-    rescue
-      reason ->
-        Logger.error(fn ->
-          [
-            "failed to update replaced transactions for transactions: ",
-            Exception.format(:error, reason, __STACKTRACE__)
-          ]
-        end)
+        :ok
+      rescue
+        reason ->
+          Logger.error(fn ->
+            [
+              "failed to update replaced transactions for transactions: ",
+              Exception.format(:error, reason, __STACKTRACE__)
+            ]
+          end)
 
-        {:retry, entries}
+          {:retry, entries}
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_run_metrics(duration, entry_count, result)
+    result
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_run_metrics(duration_seconds, entry_count, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:replaced_transaction, duration_seconds)
+
+        case result do
+          :ok ->
+            Instrumenter.fetcher_items_processed(:replaced_transaction, entry_count)
+
+          {:retry, entries} ->
+            Instrumenter.fetcher_retry(:replaced_transaction, :update_error, length(entries))
+            Instrumenter.fetcher_error(:replaced_transaction, :update_error)
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
     end
   end
 end

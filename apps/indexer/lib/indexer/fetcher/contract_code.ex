@@ -95,24 +95,32 @@ defmodule Indexer.Fetcher.ContractCode do
               tracer: Tracer
             )
   def run(entries, json_rpc_named_arguments) do
+    start_time = System.monotonic_time(:microsecond)
+    entry_count = length(entries)
+
     Logger.debug("fetching created_contract_code for transactions")
 
-    entries
-    |> Enum.map(&params/1)
-    |> EthereumJSONRPC.fetch_codes(json_rpc_named_arguments)
-    |> case do
-      {:ok, create_address_codes} ->
-        addresses_params = Addresses.extract_addresses(%{codes: create_address_codes.params_list})
+    result =
+      entries
+      |> Enum.map(&params/1)
+      |> EthereumJSONRPC.fetch_codes(json_rpc_named_arguments)
+      |> case do
+        {:ok, create_address_codes} ->
+          addresses_params = Addresses.extract_addresses(%{codes: create_address_codes.params_list})
 
-        import_with_balances(addresses_params, entries, json_rpc_named_arguments)
+          import_with_balances(addresses_params, entries, json_rpc_named_arguments)
 
-      {:error, reason} ->
-        Logger.error(fn -> ["failed to fetch contract codes: ", inspect(reason)] end,
-          error_count: Enum.count(entries)
-        )
+        {:error, reason} ->
+          Logger.error(fn -> ["failed to fetch contract codes: ", inspect(reason)] end,
+            error_count: Enum.count(entries)
+          )
 
-        {:retry, entries}
-    end
+          {:retry, entries}
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_run_metrics(duration, entry_count, result)
+    result
   end
 
   defp import_with_balances(addresses_params, entries, json_rpc_named_arguments) do
@@ -162,5 +170,33 @@ defmodule Indexer.Fetcher.ContractCode do
 
       %{block_quantity: integer_to_quantity(block_number), hash_data: to_string(created_contract_address_hash)}
     end)
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_run_metrics(duration_seconds, entry_count, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:contract_code, duration_seconds)
+
+        case result do
+          :ok ->
+            Instrumenter.fetcher_items_processed(:contract_code, entry_count)
+
+          {:retry, entries} ->
+            Instrumenter.fetcher_retry(:contract_code, :fetch_error, length(entries))
+            Instrumenter.fetcher_error(:contract_code, :fetch_error)
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

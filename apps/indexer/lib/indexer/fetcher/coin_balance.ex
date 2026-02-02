@@ -79,6 +79,8 @@ defmodule Indexer.Fetcher.CoinBalance do
   @impl BufferedTask
   @decorate trace(name: "fetch", resource: "Indexer.Fetcher.CoinBalance.run/2", service: :indexer, tracer: Tracer)
   def run(entries, json_rpc_named_arguments) do
+    start_time = System.monotonic_time(:microsecond)
+
     # the same address may be used more than once in the same block, but we only want one `Balance` for a given
     # `{address, block}`, so take unique params only
     unique_entries = Enum.uniq(entries)
@@ -96,23 +98,28 @@ defmodule Indexer.Fetcher.CoinBalance do
 
     Logger.debug(fn -> "fetching" end)
 
-    unique_filtered_entries
-    |> Enum.map(&entry_to_params/1)
-    |> EthereumJSONRPC.fetch_balances(json_rpc_named_arguments)
-    |> case do
-      {:ok, fetched_balances} ->
-        run_fetched_balances(fetched_balances, unique_filtered_entries)
+    result =
+      unique_filtered_entries
+      |> Enum.map(&entry_to_params/1)
+      |> EthereumJSONRPC.fetch_balances(json_rpc_named_arguments)
+      |> case do
+        {:ok, fetched_balances} ->
+          run_fetched_balances(fetched_balances, unique_filtered_entries)
 
-      {:error, reason} ->
-        Logger.error(
-          fn ->
-            ["failed to fetch: ", inspect(reason)]
-          end,
-          error_count: unique_entry_count
-        )
+        {:error, reason} ->
+          Logger.error(
+            fn ->
+              ["failed to fetch: ", inspect(reason)]
+            end,
+            error_count: unique_entry_count
+          )
 
-        {:retry, unique_filtered_entries}
-    end
+          {:retry, unique_filtered_entries}
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_run_metrics(duration, unique_entry_count, result)
+    result
   end
 
   defp entry_to_params({address_hash_bytes, block_number}) when is_integer(block_number) do
@@ -277,5 +284,36 @@ defmodule Indexer.Fetcher.CoinBalance do
       task_supervisor: Indexer.Fetcher.CoinBalance.TaskSupervisor,
       metadata: [fetcher: :coin_balance]
     ]
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_run_metrics(duration_seconds, entry_count, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:coin_balance, duration_seconds)
+
+        case result do
+          :ok ->
+            Instrumenter.fetcher_items_processed(:coin_balance, entry_count)
+
+          {:ok, _} ->
+            Instrumenter.fetcher_items_processed(:coin_balance, entry_count)
+
+          {:retry, entries} ->
+            Instrumenter.fetcher_retry(:coin_balance, :fetch_error, length(entries))
+            Instrumenter.fetcher_error(:coin_balance, :fetch_error)
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

@@ -32,7 +32,13 @@ defmodule Indexer.Fetcher.TokenTotalSupplyUpdater do
   end
 
   def handle_info(:update, contract_address_hashes) do
+    start_time = System.monotonic_time(:microsecond)
+    count = length(contract_address_hashes)
+
     Enum.each(contract_address_hashes, &update_token/1)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_update_metrics(duration, count)
 
     schedule_next_update()
 
@@ -65,5 +71,25 @@ defmodule Indexer.Fetcher.TokenTotalSupplyUpdater do
     end
 
     :ok
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_update_metrics(duration_seconds, count) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:token_total_supply_updater, duration_seconds)
+
+        if count > 0 do
+          Instrumenter.fetcher_items_processed(:token_total_supply_updater, count)
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

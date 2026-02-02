@@ -34,6 +34,8 @@ defmodule Explorer.Chain.Cache.GasPriceOracle do
   @spec get_average_gas_price(pos_integer(), pos_integer(), pos_integer(), pos_integer()) ::
           {:error, any} | {:ok, %{String.t() => nil | float, String.t() => nil | float, String.t() => nil | float}}
   def get_average_gas_price(num_of_blocks, safelow_percentile, average_percentile, fast_percentile) do
+    start_time = System.monotonic_time(:microsecond)
+
     safelow_percentile_fraction = safelow_percentile / 100
     average_percentile_fraction = average_percentile / 100
     fast_percentile_fraction = fast_percentile / 100
@@ -90,9 +92,13 @@ defmodule Explorer.Chain.Cache.GasPriceOracle do
 
     gas_prices = fee_query |> Repo.all(timeout: :infinity) |> process_fee_data_from_db()
 
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_query_metrics(duration)
+
     {:ok, gas_prices}
   catch
     error ->
+      record_query_metrics(0, :error)
       {:error, error}
   end
 
@@ -208,4 +214,20 @@ defmodule Explorer.Chain.Cache.GasPriceOracle do
   end
 
   defp async_task_on_deletion(_data), do: nil
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_query_metrics(duration_seconds, status \\ :success) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:gas_price_oracle, :on_demand, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

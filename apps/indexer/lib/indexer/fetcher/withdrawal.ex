@@ -89,6 +89,9 @@ defmodule Indexer.Fetcher.Withdrawal do
       Logger.info("Withdrawals from old blocks are fetched.")
       {:stop, :normal, state}
     else
+      start_time = System.monotonic_time(:microsecond)
+      block_count = length(blocks_to_fetch)
+
       new_blocks_to_fetch =
         blocks_to_fetch
         |> Stream.chunk_every(batch_size)
@@ -99,6 +102,9 @@ defmodule Indexer.Fetcher.Withdrawal do
           zip_input_on_exit: true
         )
         |> Enum.reduce([], &fetch_reducer/2)
+
+      duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+      record_fetch_metrics(duration, block_count, length(new_blocks_to_fetch))
 
       Process.send_after(self(), :fetch_withdrawals, interval)
 
@@ -155,5 +161,30 @@ defmodule Indexer.Fetcher.Withdrawal do
     blocks = from |> Withdrawal.blocks_without_withdrawals_query() |> Repo.all()
     Logger.debug("missing_block_numbers #{length(blocks)}")
     blocks
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_fetch_metrics(duration_seconds, blocks_attempted, blocks_failed) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:withdrawal, duration_seconds)
+
+        blocks_processed = blocks_attempted - blocks_failed
+        if blocks_processed > 0 do
+          Instrumenter.fetcher_items_processed(:withdrawal, blocks_processed)
+        end
+
+        if blocks_failed > 0 do
+          Instrumenter.fetcher_retry(:withdrawal, :fetch_error, blocks_failed)
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

@@ -45,7 +45,13 @@ defmodule Indexer.Fetcher.CoinBalanceDailyUpdater do
   end
 
   def handle_info(:update, state) do
-    Chain.import(%{address_coin_balances_daily: %{params: Map.values(state)}})
+    start_time = System.monotonic_time(:microsecond)
+    count = map_size(state)
+
+    result = Chain.import(%{address_coin_balances_daily: %{params: Map.values(state)}})
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_update_metrics(duration, count, result)
 
     schedule_next_update()
 
@@ -64,5 +70,32 @@ defmodule Indexer.Fetcher.CoinBalanceDailyUpdater do
       end
 
     Process.send_after(self(), :update, update_interval)
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_update_metrics(duration_seconds, count, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:coin_balance_daily, duration_seconds)
+
+        case result do
+          {:ok, _} ->
+            Instrumenter.fetcher_items_processed(:coin_balance_daily, count)
+
+          {:error, _} ->
+            Instrumenter.fetcher_error(:coin_balance_daily, :import_error)
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

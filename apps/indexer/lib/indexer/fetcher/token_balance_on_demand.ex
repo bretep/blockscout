@@ -56,8 +56,15 @@ defmodule Indexer.Fetcher.TokenBalanceOnDemand do
       |> Enum.filter(fn current_token_balance -> current_token_balance.block_number < stale_balance_window end)
 
     if Enum.count(stale_current_token_balances) > 0 do
+      start_time = System.monotonic_time(:microsecond)
+      staleness = latest_block_number - Enum.min_by(stale_current_token_balances, & &1.block_number).block_number
+
       fetch_and_update(latest_block_number, address_hash, stale_current_token_balances)
+
+      duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+      record_fetch_metrics(:token_balance, duration, :success, staleness)
     else
+      record_fetch_metrics(:token_balance, 0, :skipped, nil)
       :current
     end
 
@@ -169,6 +176,8 @@ defmodule Indexer.Fetcher.TokenBalanceOnDemand do
   end
 
   defp do_trigger_historic_fetch(address_hash, contract_address_hash, token_type, token_id, block_number) do
+    start_time = System.monotonic_time(:microsecond)
+
     request = %{
       token_contract_address_hash: to_string(contract_address_hash),
       address_hash: to_string(address_hash),
@@ -184,25 +193,34 @@ defmodule Indexer.Fetcher.TokenBalanceOnDemand do
 
     balance = balance_response[:ok]
 
-    if balance do
-      %{
-        address_token_balances: %{
-          params: [
-            %{
-              address_hash: address_hash,
-              token_contract_address_hash: contract_address_hash,
-              token_type: token_type,
-              token_id: token_id,
-              block_number: block_number,
-              value: Decimal.new(balance),
-              value_fetched_at: DateTime.utc_now()
-            }
-          ]
-        },
-        broadcast: :on_demand
-      }
-      |> Chain.import()
-    end
+    result =
+      if balance do
+        %{
+          address_token_balances: %{
+            params: [
+              %{
+                address_hash: address_hash,
+                token_contract_address_hash: contract_address_hash,
+                token_type: token_type,
+                token_id: token_id,
+                block_number: block_number,
+                value: Decimal.new(balance),
+                value_fetched_at: DateTime.utc_now()
+              }
+            ]
+          },
+          broadcast: :on_demand
+        }
+        |> Chain.import()
+      else
+        {:error, :no_balance}
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    status = if match?({:ok, _}, result), do: :success, else: :error
+    record_fetch_metrics(:token_balance_historic, duration, status, nil)
+
+    result
   end
 
   defp latest_block_number do
@@ -227,6 +245,18 @@ defmodule Indexer.Fetcher.TokenBalanceOnDemand do
           threshold = Application.get_env(:indexer, __MODULE__)[:threshold]
           block_number - div(threshold, average_block_time)
         end
+    end
+  end
+
+  defp record_fetch_metrics(fetch_type, duration_seconds, status, staleness_blocks) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.on_demand_fetch(fetch_type, duration_seconds, status, staleness_blocks)
+      rescue
+        _ -> :ok
+      end
     end
   end
 end

@@ -12,18 +12,30 @@
 ## (Disabled by default..use with caution!)
 -heart
 
-## Enable kernel poll and a few async threads
-##+K true
-##+A 5
-## For OTP21+, the +A flag is not used anymore,
-## +SDio replace it to use dirty schedulers
-##+SDio 5
+## Enable kernel poll for better I/O performance (epoll on Linux, kqueue on BSD/macOS)
++K true
+
+## Dirty I/O schedulers - handles file and network I/O operations
+## Default is 10, increase for heavy I/O workloads (database, HTTP, NATS)
++SDio 32
 
 ## Increase number of concurrent ports/sockets
-##-env ERL_MAX_PORTS 4096
+## Needed for: database connection pools, HTTP connections, NATS connections
++Q 65536
 
-## Tweak GC to run more often
-##-env ERL_FULLSWEEP_AFTER 10
+## Disable busy waiting to reduce CPU usage in containers
+## Schedulers won't spin-wait when idle, reducing CPU consumption
++sbwt none
++sbwtdcpu none
++sbwtdio none
+
+## Increase process limit (default 262144)
+## Blockscout spawns many processes for concurrent fetching
++P 1000000
+
+## Increase atom limit (default 1048576)
+## Large codebases with many modules can exhaust atoms
++t 2000000
 
 # Enable SMP automatically based on availability
 # On OTP21+, this is not needed anymore.

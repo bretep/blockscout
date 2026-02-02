@@ -29,7 +29,10 @@ defmodule Explorer.Chain.Cache.AddressSumMinusBurnt do
     {:ok, task} =
       Task.start(fn ->
         try do
+          start_time = System.monotonic_time(:microsecond)
           result = Etherscan.fetch_sum_coin_total_supply_minus_burnt()
+          duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+          record_query_metrics(duration)
 
           params = %{
             counter_type: "sum_coin_total_supply_minus_burnt",
@@ -58,4 +61,20 @@ defmodule Explorer.Chain.Cache.AddressSumMinusBurnt do
   defp async_task_on_deletion({:delete, _, :sum_minus_burnt}), do: get_async_task()
 
   defp async_task_on_deletion(_data), do: nil
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_query_metrics(duration_seconds) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:address_sum_minus_burnt, :on_demand, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

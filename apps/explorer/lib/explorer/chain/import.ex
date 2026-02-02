@@ -7,6 +7,7 @@ defmodule Explorer.Chain.Import do
   alias Explorer.Account.Notify
   alias Explorer.Chain.Events.Publisher
   alias Explorer.Chain.Import
+  alias Explorer.Prometheus.Instrumenter
   alias Explorer.Repo
 
   require Logger
@@ -342,12 +343,28 @@ defmodule Explorer.Chain.Import do
   end
 
   defp import_transactions(multis, options) when is_list(multis) and is_map(options) do
-    Enum.reduce_while(multis, {:ok, %{}}, fn multi, {:ok, acc_changes} ->
+    start_time = System.monotonic_time(:microsecond)
+
+    result = Enum.reduce_while(multis, {:ok, %{}}, fn multi, {:ok, acc_changes} ->
       case import_transaction(multi, options) do
         {:ok, changes} -> {:cont, {:ok, Map.merge(acc_changes, changes)}}
         {:error, _, _, _} = error -> {:halt, error}
       end
     end)
+
+    # Record transaction duration
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_import_transaction_duration(duration)
+
+    # Record records imported per runner
+    case result do
+      {:ok, changes} ->
+        record_import_results(changes)
+      _ ->
+        :ok
+    end
+
+    result
   rescue
     exception in DBConnection.ConnectionError ->
       case Exception.message(exception) do
@@ -373,5 +390,39 @@ defmodule Explorer.Chain.Import do
   def timestamps do
     now = DateTime.utc_now()
     %{inserted_at: now, updated_at: now}
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_import_transaction_duration(duration_seconds) do
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.import_transaction_duration(duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
+
+  defp record_import_results(changes) when is_map(changes) do
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Enum.each(changes, fn {runner_key, result} ->
+          count = case result do
+            list when is_list(list) -> length(list)
+            %{} = map -> map_size(map)
+            _ -> 0
+          end
+
+          if count > 0 do
+            Instrumenter.import_records(runner_key, count)
+          end
+        end)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

@@ -199,11 +199,24 @@ defmodule Explorer.SmartContract.Solidity.Publisher do
   defp create_or_update_smart_contract(address_hash, attrs) do
     Logger.info("Publish successfully verified Solidity smart-contract #{address_hash} into the DB")
 
-    if SmartContract.verified?(address_hash) do
+    result = if SmartContract.verified?(address_hash) do
       SmartContract.update_smart_contract(attrs, attrs.external_libraries, attrs.secondary_sources)
     else
       SmartContract.create_smart_contract(attrs, attrs.external_libraries, attrs.secondary_sources)
     end
+
+    # Clear token instance errors so they can be re-fetched with the new contract info
+    # This is useful for NFT contracts that may now have working tokenURI after verification
+    case result do
+      {:ok, _} ->
+        {count, _} = Explorer.Chain.clear_token_instance_errors(address_hash)
+        if count > 0 do
+          Logger.info("Cleared #{count} token instance errors for contract #{address_hash}")
+        end
+      _ -> :ok
+    end
+
+    result
   end
 
   defp unverified_smart_contract(address_hash, params, error, error_message, verification_with_files? \\ false) do

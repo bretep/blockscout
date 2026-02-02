@@ -18,6 +18,7 @@ defmodule Explorer.Chain.Cache.TransactionsCounter do
   alias Explorer.Chain
   alias Explorer.Chain.Events.Subscriber
   alias Explorer.Chain.Transaction
+  alias Explorer.Prometheus.Instrumenter
   alias Explorer.Repo
 
   @counter_type "transactions_counter"
@@ -113,7 +114,67 @@ defmodule Explorer.Chain.Cache.TransactionsCounter do
   # Initialize counter with full accurate count (runs once, may take a while)
   defp initialize_counter(max_block) when is_integer(max_block) and max_block > 0 do
     require Logger
+
+    # Double-check if checkpoint exists to prevent race conditions
+    # (another process may have initialized while we were checking)
+    case Chain.get_last_fetched_counter(@checkpoint_type, []) do
+      nil ->
+        do_initialize_counter(max_block)
+
+      existing ->
+        existing_int = Decimal.to_integer(existing)
+
+        if existing_int > 0 do
+          Logger.info("TransactionsCounter: Checkpoint already exists (block #{existing_int}), skipping init")
+          :ok
+        else
+          do_initialize_counter(max_block)
+        end
+    end
+  end
+
+  defp do_initialize_counter(max_block) do
+    require Logger
     Logger.info("TransactionsCounter: Starting init count up to block #{max_block}")
+
+    # Use advisory lock to prevent concurrent initialization
+    lock_key = :erlang.phash2({__MODULE__, :init})
+
+    case Repo.query("SELECT pg_try_advisory_lock($1)", [lock_key]) do
+      {:ok, %{rows: [[true]]}} ->
+        try do
+          # Re-check checkpoint inside lock (another process may have just finished)
+          case Chain.get_last_fetched_counter(@checkpoint_type, []) do
+            nil ->
+              run_count_query(max_block)
+
+            existing ->
+              existing_int = Decimal.to_integer(existing)
+
+              if existing_int > 0 do
+                Logger.info("TransactionsCounter: Checkpoint set by another process (block #{existing_int})")
+                :ok
+              else
+                run_count_query(max_block)
+              end
+          end
+        after
+          Repo.query("SELECT pg_advisory_unlock($1)", [lock_key])
+        end
+
+      {:ok, %{rows: [[false]]}} ->
+        Logger.info("TransactionsCounter: Another process is initializing, skipping")
+        :ok
+
+      {:error, reason} ->
+        Logger.error("TransactionsCounter: Failed to acquire lock: #{inspect(reason)}")
+        :error
+    end
+  end
+
+  defp run_count_query(max_block) do
+    require Logger
+    start_time = System.monotonic_time(:microsecond)
 
     try do
       # Do a full count for accuracy - this only happens once on first run
@@ -130,6 +191,10 @@ defmodule Explorer.Chain.Cache.TransactionsCounter do
       Chain.upsert_last_fetched_counter(%{counter_type: @counter_type, value: count})
       Chain.upsert_last_fetched_counter(%{counter_type: @checkpoint_type, value: max_block})
 
+      # Record metrics
+      duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+      record_consolidation_metrics(:init, duration, count, max_block)
+
       Logger.info("TransactionsCounter: Stored counter and checkpoint (block #{max_block})")
       :ok
     rescue
@@ -143,6 +208,8 @@ defmodule Explorer.Chain.Cache.TransactionsCounter do
 
   # Increment counter by counting only new blocks (fast)
   defp increment_counter(current_count, checkpoint, max_block) do
+    start_time = System.monotonic_time(:microsecond)
+
     # Count transactions only in blocks after the checkpoint
     incremental_count =
       from(t in Transaction,
@@ -156,6 +223,10 @@ defmodule Explorer.Chain.Cache.TransactionsCounter do
     # Update count and checkpoint
     Chain.upsert_last_fetched_counter(%{counter_type: @counter_type, value: new_count})
     Chain.upsert_last_fetched_counter(%{counter_type: @checkpoint_type, value: max_block})
+
+    # Record metrics
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_consolidation_metrics(:incremental, duration, incremental_count, max_block)
 
     :ok
   end
@@ -175,5 +246,18 @@ defmodule Explorer.Chain.Cache.TransactionsCounter do
   """
   def enable_consolidation? do
     Application.get_env(:explorer, __MODULE__, [])[:enable_consolidation] != false
+  end
+
+  # Record consolidation metrics
+  defp record_consolidation_metrics(consolidation_type, duration_seconds, count, checkpoint_block) do
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:transactions_counter, consolidation_type, duration_seconds)
+        Instrumenter.cache_consolidation_records(:transactions_counter, count)
+        Instrumenter.cache_checkpoint(:transactions_counter, checkpoint_block)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

@@ -43,10 +43,14 @@ defmodule Explorer.Market.MarketHistoryCache do
   end
 
   defp update_cache do
+    start_time = System.monotonic_time(:microsecond)
     new_data = fetch_from_db()
 
     put_into_cache(@last_update_key, Helper.current_time())
     put_into_cache(@history_key, new_data)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_cache_update_metrics(duration)
 
     new_data
   end
@@ -70,5 +74,21 @@ defmodule Explorer.Market.MarketHistoryCache do
 
   defp put_into_cache(key, value) do
     ConCache.put(@cache_name, key, value)
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_cache_update_metrics(duration_seconds) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:market_history, :on_demand, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

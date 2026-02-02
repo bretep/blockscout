@@ -133,7 +133,9 @@ defmodule BlockScoutWeb.Mixfile do
       {:ueberauth, "~> 0.7"},
       {:ueberauth_auth0, "~> 2.0"},
       {:bureaucrat, "~> 0.2.9", only: :test},
-      {:logger_json, "~> 5.1"}
+      {:logger_json, "~> 5.1"},
+      # NATS client for distributed PubSub across multiple API nodes
+      {:gnat, "~> 1.8"}
     ]
   end
 

@@ -63,7 +63,12 @@ defmodule Indexer.Fetcher.EmptyBlocksSanitizer do
       fetcher: :empty_blocks_to_refetch
     )
 
+    start_time = System.monotonic_time(:microsecond)
+
     sanitize_empty_blocks(json_rpc_named_arguments)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_sanitize_metrics(duration)
 
     Process.send_after(self(), :sanitize_empty_blocks, interval)
 
@@ -177,5 +182,21 @@ defmodule Indexer.Fetcher.EmptyBlocksSanitizer do
 
   defp limit do
     Application.get_env(:indexer, __MODULE__)[:batch_size]
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_sanitize_metrics(duration_seconds) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:empty_blocks_sanitizer, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

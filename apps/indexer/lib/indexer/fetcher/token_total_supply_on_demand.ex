@@ -34,7 +34,12 @@ defmodule Indexer.Fetcher.TokenTotalSupplyOnDemand do
 
   @impl true
   def handle_cast({:fetch_and_update, address}, state) do
-    do_fetch(address)
+    start_time = System.monotonic_time(:microsecond)
+
+    result = do_fetch(address)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_fetch_metrics(duration, result)
 
     {:noreply, state}
   end
@@ -60,6 +65,32 @@ defmodule Indexer.Fetcher.TokenTotalSupplyOnDemand do
 
       Publisher.broadcast(%{token_total_supply: [token]}, :on_demand)
       :ok
+    else
+      :skipped
+    end
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_fetch_metrics(duration_seconds, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        status =
+          case result do
+            :ok -> :success
+            :skipped -> :skipped
+            nil -> :skipped
+            _ -> :error
+          end
+
+        Instrumenter.on_demand_fetch(:token_total_supply, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
     end
   end
 end

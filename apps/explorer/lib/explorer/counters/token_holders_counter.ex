@@ -6,6 +6,7 @@ defmodule Explorer.Counters.TokenHoldersCounter do
 
   alias Explorer.Chain
   alias Explorer.Counters.Helper
+  alias Explorer.Prometheus.Instrumenter
 
   @cache_name :token_holders_counter
   @last_update_key "last_update"
@@ -41,8 +42,13 @@ defmodule Explorer.Counters.TokenHoldersCounter do
   end
 
   def fetch(address_hash) do
-    if cache_expired?(address_hash) do
+    cache_miss = cache_expired?(address_hash)
+
+    if cache_miss do
       update_cache(address_hash)
+      record_cache_metric(:miss)
+    else
+      record_cache_metric(:hit)
     end
 
     address_hash_string = to_string(address_hash)
@@ -66,7 +72,12 @@ defmodule Explorer.Counters.TokenHoldersCounter do
   defp update_cache(address_hash) do
     address_hash_string = to_string(address_hash)
     put_into_cache("hash_#{address_hash_string}_#{@last_update_key}", Helper.current_time())
+
+    start_time = System.monotonic_time(:microsecond)
     new_data = Chain.count_token_holders_from_token_hash(address_hash)
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_query_metric(duration)
+
     put_into_cache("hash_#{address_hash_string}", new_data)
   end
 
@@ -83,4 +94,26 @@ defmodule Explorer.Counters.TokenHoldersCounter do
   end
 
   defp enable_consolidation?, do: @enable_consolidation
+
+  # Record cache hit/miss metrics
+  defp record_cache_metric(result) do
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.token_holders_cache(result)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
+
+  # Record query duration metrics
+  defp record_query_metric(duration_seconds) do
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.token_query(:holders_count, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

@@ -61,8 +61,37 @@ defmodule Indexer.Fetcher.FirstTraceOnDemand do
 
   @impl true
   def handle_cast({:fetch, transaction}, state) do
-    fetch_first_trace(transaction, state)
+    start_time = System.monotonic_time(:microsecond)
+
+    result = fetch_first_trace(transaction, state)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_fetch_metrics(duration, result)
 
     {:noreply, state}
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_fetch_metrics(duration_seconds, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        status =
+          case result do
+            {:ok, _} -> :success
+            :ok -> :success
+            :ignore -> :skipped
+            _ -> :error
+          end
+
+        Instrumenter.on_demand_fetch(:first_trace, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

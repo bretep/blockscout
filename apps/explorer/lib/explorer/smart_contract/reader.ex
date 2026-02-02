@@ -167,14 +167,32 @@ defmodule Explorer.SmartContract.Reader do
     json_rpc_named_arguments =
       Keyword.get(opts, :json_rpc_named_arguments) || Application.get_env(:explorer, :json_rpc_named_arguments)
 
-    EthereumJSONRPC.execute_contract_functions(requests, abi, json_rpc_named_arguments)
+    start_time = System.monotonic_time(:microsecond)
+    batch_size = length(requests)
+
+    result = EthereumJSONRPC.execute_contract_functions(requests, abi, json_rpc_named_arguments)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    status = determine_batch_status(result)
+    record_contract_call_metrics(:query, duration, status, batch_size)
+
+    result
   end
 
   @spec query_contracts([Contract.call()], term(), true | false) :: [Contract.call_result()]
   def query_contracts(requests, abi, [], leave_error_as_map) do
     json_rpc_named_arguments = Application.get_env(:explorer, :json_rpc_named_arguments)
 
-    EthereumJSONRPC.execute_contract_functions(requests, abi, json_rpc_named_arguments, leave_error_as_map)
+    start_time = System.monotonic_time(:microsecond)
+    batch_size = length(requests)
+
+    result = EthereumJSONRPC.execute_contract_functions(requests, abi, json_rpc_named_arguments, leave_error_as_map)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    status = determine_batch_status(result)
+    record_contract_call_metrics(:query, duration, status, batch_size)
+
+    result
   end
 
   @doc """
@@ -851,6 +869,35 @@ defmodule Explorer.SmartContract.Reader do
       Hash.to_string(%Hash{byte_count: byte_size(value), bytes: value})
     else
       "0x"
+    end
+  end
+
+  # Determine overall batch status from results
+  defp determine_batch_status(results) when is_list(results) do
+    {successes, errors} =
+      Enum.split_with(results, fn
+        {:ok, _} -> true
+        _ -> false
+      end)
+
+    cond do
+      length(errors) == 0 -> :success
+      length(successes) == 0 -> :error
+      true -> :partial
+    end
+  end
+
+  defp determine_batch_status(_), do: :error
+
+  defp record_contract_call_metrics(call_type, duration_seconds, status, batch_size) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.contract_call(call_type, duration_seconds, status, batch_size)
+      rescue
+        _ -> :ok
+      end
     end
   end
 end

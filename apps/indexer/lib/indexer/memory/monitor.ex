@@ -64,9 +64,13 @@ defmodule Indexer.Memory.Monitor do
   @impl GenServer
   def handle_info(:check, state) do
     total = :erlang.memory(:total)
+    limit = memory_limit()
 
-    if memory_limit() < total do
-      log_memory(%{limit: memory_limit(), total: total})
+    # Record memory metrics on every check
+    record_memory_metrics(total, limit)
+
+    if limit < total do
+      log_memory(%{limit: limit, total: total})
       shrink_or_log(state)
     end
 
@@ -138,6 +142,8 @@ defmodule Indexer.Memory.Monitor do
 
     case Shrinkable.shrink(pid) do
       :ok ->
+        record_memory_shrink()
+
         Logger.info(fn ->
           after_memory = memory(pid)
 
@@ -172,5 +178,33 @@ defmodule Indexer.Memory.Monitor do
 
   defp memory_limit do
     Application.get_env(:indexer, :memory_limit)
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_memory_metrics(usage_bytes, limit_bytes) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.memory_usage(usage_bytes, limit_bytes)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
+
+  defp record_memory_shrink do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.memory_shrink()
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

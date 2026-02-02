@@ -54,7 +54,13 @@ defmodule Explorer.Chain.Cache.NewContractsCounter do
 
   @impl true
   def handle_info(:consolidate, state) do
+    start_time = System.monotonic_time(:microsecond)
+
     consolidate()
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_consolidation_metrics(duration)
+
     schedule_next_consolidation()
 
     {:noreply, state}
@@ -94,4 +100,20 @@ defmodule Explorer.Chain.Cache.NewContractsCounter do
   `config :explorer, Explorer.Chain.Cache.NewContractsCounter, enable_consolidation: false`
   """
   def enable_consolidation?, do: @enable_consolidation
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_consolidation_metrics(duration_seconds) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:new_contracts_counter, :periodic, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

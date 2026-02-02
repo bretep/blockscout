@@ -8,6 +8,7 @@ defmodule BlockScoutWeb.AccessHelper do
   alias BlockScoutWeb.API.APILogger
   alias BlockScoutWeb.API.RPC.RPCView
   alias BlockScoutWeb.API.V2.ApiView
+  alias BlockScoutWeb.Prometheus.ApiInstrumenter
   alias BlockScoutWeb.WebRouter.Helpers
   alias Explorer.AccessHelper
   alias Explorer.Account.Api.Key, as: ApiKey
@@ -81,26 +82,43 @@ defmodule BlockScoutWeb.AccessHelper do
 
     user_agent = get_user_agent(conn)
 
-    cond do
+    {limit_type, result} = cond do
       check_api_key(conn) && get_api_key(conn) == static_api_key ->
-        rate_limit(static_api_key, limit_by_key, time_interval_limit)
+        {:static_api_key, rate_limit(static_api_key, limit_by_key, time_interval_limit)}
 
       check_api_key(conn) && !is_nil(plan) ->
-        conn
-        |> get_api_key()
-        |> rate_limit(plan.max_req_per_second, time_interval_limit)
+        result = conn
+                 |> get_api_key()
+                 |> rate_limit(plan.max_req_per_second, time_interval_limit)
+        {:api_key_plan, result}
 
       Enum.member?(whitelisted_ips(rate_limit_config), ip_string) ->
-        rate_limit(ip_string, limit_by_whitelisted_ip, time_interval_limit)
+        {:whitelisted_ip, rate_limit(ip_string, limit_by_whitelisted_ip, time_interval_limit)}
 
       is_api_v2_request?(conn) && !is_nil(token) && !is_nil(user_agent) ->
-        rate_limit(token, api_v2_ui_limit, time_interval_limit)
+        {:api_v2_ui_token, rate_limit(token, api_v2_ui_limit, time_interval_limit)}
 
       is_api_v2_request?(conn) && !is_nil(user_agent) ->
-        rate_limit(ip_string, limit_by_ip, time_interval_by_ip)
+        {:api_v2_ip, rate_limit(ip_string, limit_by_ip, time_interval_by_ip)}
 
       true ->
-        rate_limit("api", global_limit, time_interval_limit)
+        {:global, rate_limit("api", global_limit, time_interval_limit)}
+    end
+
+    # Record rate limit metrics
+    record_rate_limit_metric(limit_type, result)
+
+    result
+  end
+
+  defp record_rate_limit_metric(limit_type, result) do
+    if Code.ensure_loaded?(ApiInstrumenter) do
+      try do
+        metric_result = if result == :ok, do: :allowed, else: :denied
+        ApiInstrumenter.rate_limit_check(limit_type, metric_result)
+      rescue
+        _ -> :ok
+      end
     end
   end
 

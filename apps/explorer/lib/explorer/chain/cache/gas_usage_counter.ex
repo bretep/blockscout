@@ -18,6 +18,7 @@ defmodule Explorer.Chain.Cache.GasUsageCounter do
   alias Explorer.Chain
   alias Explorer.Chain.Events.Subscriber
   alias Explorer.Chain.Transaction
+  alias Explorer.Prometheus.Instrumenter
   alias Explorer.Repo
 
   @counter_type "gas_usage_counter"
@@ -125,7 +126,66 @@ defmodule Explorer.Chain.Cache.GasUsageCounter do
   # Initialize counter with full accurate sum (runs once, may take a while)
   defp initialize_counter(max_block) when is_integer(max_block) and max_block > 0 do
     require Logger
+
+    # Double-check if checkpoint exists to prevent race conditions
+    case Chain.get_last_fetched_counter(@checkpoint_type, []) do
+      nil ->
+        do_initialize_counter(max_block)
+
+      existing ->
+        existing_int = Decimal.to_integer(existing)
+
+        if existing_int > 0 do
+          Logger.info("GasUsageCounter: Checkpoint already exists (block #{existing_int}), skipping init")
+          :ok
+        else
+          do_initialize_counter(max_block)
+        end
+    end
+  end
+
+  defp do_initialize_counter(max_block) do
+    require Logger
     Logger.info("GasUsageCounter: Starting init sum up to block #{max_block}")
+
+    # Use advisory lock to prevent concurrent initialization
+    lock_key = :erlang.phash2({__MODULE__, :init})
+
+    case Repo.query("SELECT pg_try_advisory_lock($1)", [lock_key]) do
+      {:ok, %{rows: [[true]]}} ->
+        try do
+          # Re-check checkpoint inside lock
+          case Chain.get_last_fetched_counter(@checkpoint_type, []) do
+            nil ->
+              run_sum_query(max_block)
+
+            existing ->
+              existing_int = Decimal.to_integer(existing)
+
+              if existing_int > 0 do
+                Logger.info("GasUsageCounter: Checkpoint set by another process (block #{existing_int})")
+                :ok
+              else
+                run_sum_query(max_block)
+              end
+          end
+        after
+          Repo.query("SELECT pg_advisory_unlock($1)", [lock_key])
+        end
+
+      {:ok, %{rows: [[false]]}} ->
+        Logger.info("GasUsageCounter: Another process is initializing, skipping")
+        :ok
+
+      {:error, reason} ->
+        Logger.error("GasUsageCounter: Failed to acquire lock: #{inspect(reason)}")
+        :error
+    end
+  end
+
+  defp run_sum_query(max_block) do
+    require Logger
+    start_time = System.monotonic_time(:microsecond)
 
     try do
       # Do a full sum for accuracy - this only happens once on first run
@@ -142,6 +202,10 @@ defmodule Explorer.Chain.Cache.GasUsageCounter do
       Chain.upsert_last_fetched_counter(%{counter_type: @counter_type, value: total})
       Chain.upsert_last_fetched_counter(%{counter_type: @checkpoint_type, value: max_block})
 
+      # Record metrics
+      duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+      record_consolidation_metrics(:init, duration, max_block)
+
       Logger.info("GasUsageCounter: Stored counter and checkpoint (block #{max_block})")
       :ok
     rescue
@@ -155,6 +219,8 @@ defmodule Explorer.Chain.Cache.GasUsageCounter do
 
   # Increment counter by summing only new blocks (fast)
   defp increment_counter(current_total, checkpoint, max_block) do
+    start_time = System.monotonic_time(:microsecond)
+
     # Sum gas_used only in blocks after the checkpoint
     incremental_sum =
       from(t in Transaction,
@@ -168,6 +234,10 @@ defmodule Explorer.Chain.Cache.GasUsageCounter do
     # Update total and checkpoint
     Chain.upsert_last_fetched_counter(%{counter_type: @counter_type, value: new_total})
     Chain.upsert_last_fetched_counter(%{counter_type: @checkpoint_type, value: max_block})
+
+    # Record metrics
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_consolidation_metrics(:incremental, duration, max_block)
 
     :ok
   end
@@ -187,5 +257,17 @@ defmodule Explorer.Chain.Cache.GasUsageCounter do
   """
   def enable_consolidation? do
     Application.get_env(:explorer, __MODULE__, [])[:enable_consolidation] != false
+  end
+
+  # Record consolidation metrics
+  defp record_consolidation_metrics(consolidation_type, duration_seconds, checkpoint_block) do
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:gas_usage_counter, consolidation_type, duration_seconds)
+        Instrumenter.cache_checkpoint(:gas_usage_counter, checkpoint_block)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

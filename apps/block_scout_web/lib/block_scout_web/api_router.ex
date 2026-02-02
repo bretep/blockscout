@@ -14,13 +14,14 @@ defmodule BlockScoutWeb.ApiRouter do
   """
   use BlockScoutWeb, :router
   alias BlockScoutWeb.{AddressTransactionController, APIKeyV2Router, SmartContractsApiV2Router}
-  alias BlockScoutWeb.Plug.{CheckAccountAPI, CheckApiV2, RateLimit}
+  alias BlockScoutWeb.Plug.{ApiMetrics, CheckAccountAPI, CheckApiV2, RateLimit}
 
   forward("/v2/smart-contracts", SmartContractsApiV2Router)
   forward("/v2/key", APIKeyV2Router)
 
   pipeline :api do
     plug(BlockScoutWeb.Plug.Logger, application: :api)
+    plug(ApiMetrics, application: :api)
     plug(:accepts, ["json"])
   end
 
@@ -32,6 +33,7 @@ defmodule BlockScoutWeb.ApiRouter do
 
   pipeline :api_v2 do
     plug(BlockScoutWeb.Plug.Logger, application: :api_v2)
+    plug(ApiMetrics, application: :api_v2)
     plug(:accepts, ["json"])
     plug(CheckApiV2)
     plug(:fetch_session)
@@ -41,13 +43,24 @@ defmodule BlockScoutWeb.ApiRouter do
 
   pipeline :api_v2_no_session do
     plug(BlockScoutWeb.Plug.Logger, application: :api_v2)
+    plug(ApiMetrics, application: :api_v2)
     plug(:accepts, ["json"])
     plug(CheckApiV2)
     plug(RateLimit)
   end
 
+  # SSE pipeline - no session, no CSRF, accepts all content types
+  pipeline :api_v2_sse do
+    plug(BlockScoutWeb.Plug.Logger, application: :api_v2)
+    plug(ApiMetrics, application: :sse)
+    plug(CheckApiV2)
+    # Note: No :accepts plug - SSE returns text/event-stream
+    # Note: No :fetch_session or :protect_from_forgery - SSE is stateless
+  end
+
   alias BlockScoutWeb.Account.Api.V1.{AuthenticateController, EmailController, TagsController, UserController}
   alias BlockScoutWeb.API.V2
+  alias BlockScoutWeb.SSE
 
   # TODO: Remove /account/v1 paths
   scope "/account/v1", as: :account_v1 do
@@ -184,6 +197,22 @@ defmodule BlockScoutWeb.ApiRouter do
     get("/smart-contracts/:address_hash_param", V2.ImportController, :try_to_search_contract)
   end
 
+  # SSE endpoints - separate pipeline without session/CSRF for cross-origin streaming
+  scope "/v2/sse" do
+    pipe_through(:api_v2_sse)
+
+    get("/events", SSE.EventController, :events)
+    # Entity-specific endpoints (Phoenix channel compatible)
+    get("/addresses/:address_hash", SSE.EventController, :address_events)
+    get("/transactions/:tx_hash", SSE.EventController, :transaction_events)
+    get("/tokens/:token_address", SSE.EventController, :token_events)
+    get("/blocks", SSE.EventController, :block_events)
+    # Global event streams (replaces polling)
+    get("/pending-transactions", SSE.EventController, :pending_transaction_events)
+    get("/new-transactions", SSE.EventController, :new_transaction_events)
+    get("/stats", SSE.EventController, :stats_events)
+  end
+
   scope "/v2", as: :api_v2 do
     pipe_through(:api_v2)
 
@@ -255,6 +284,8 @@ defmodule BlockScoutWeb.ApiRouter do
       get("/:address_hash_param/instances/:token_id/transfers", V2.TokenController, :transfers_by_instance)
       get("/:address_hash_param/instances/:token_id/holders", V2.TokenController, :holders_by_instance)
       get("/:address_hash_param/instances/:token_id/transfers-count", V2.TokenController, :transfers_count_by_instance)
+      # Admin endpoint to re-queue failed token instances for metadata refetch
+      post("/:address_hash_param/instances/refetch", V2.TokenController, :refetch_instances)
     end
 
     scope "/main-page" do
@@ -315,7 +346,8 @@ defmodule BlockScoutWeb.ApiRouter do
     forward("/graphql", Absinthe.Plug,
       schema: BlockScoutWeb.Schema,
       analyze_complexity: true,
-      max_complexity: @max_complexity
+      max_complexity: @max_complexity,
+      before_send: {BlockScoutWeb.Plugs.GraphQLMetrics, :record_graphql_metrics}
     )
 
     get("/transactions-csv", AddressTransactionController, :transactions_csv)

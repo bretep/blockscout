@@ -83,7 +83,12 @@ defmodule Explorer.Counters.AddressesCounter do
 
   @impl true
   def handle_info(:consolidate, state) do
+    start_time = System.monotonic_time(:microsecond)
+
     consolidate()
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_consolidation_metrics(duration)
 
     schedule_next_consolidation()
 
@@ -128,4 +133,20 @@ defmodule Explorer.Counters.AddressesCounter do
   `config :explorer, Explorer.Counters.AddressesCounter, enable_consolidation: false`
   """
   def enable_consolidation?, do: @enable_consolidation
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_consolidation_metrics(duration_seconds) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:addresses_counter, :periodic, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

@@ -75,7 +75,8 @@ defmodule BlockScoutWeb.Endpoint do
 
   use SpandexPhoenix
 
-  plug(BlockScoutWeb.Prometheus.Exporter)
+  # Prometheus metrics are served on a separate port via MetricsEndpoint
+  # See BlockScoutWeb.Prometheus.MetricsEndpoint
 
   # 'x-apollo-tracing' header for https://www.graphqlbin.com to work with our GraphQL endpoint
   plug(CORSPlug, headers: ["x-apollo-tracing" | CORSPlug.defaults()[:headers]])

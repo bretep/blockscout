@@ -64,10 +64,14 @@ defmodule Explorer.Counters.TokenTransfersCounter do
   end
 
   defp update_cache(address_hash) do
+    start_time = System.monotonic_time(:microsecond)
     address_hash_string = to_string(address_hash)
     put_into_cache("hash_#{address_hash_string}_#{@last_update_key}", Helper.current_time())
     new_data = Chain.count_token_transfers_from_token_hash(address_hash)
     put_into_cache("hash_#{address_hash_string}", new_data)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_cache_update_metrics(duration)
   end
 
   defp fetch_from_cache(key) do
@@ -83,4 +87,20 @@ defmodule Explorer.Counters.TokenTransfersCounter do
   end
 
   defp enable_consolidation?, do: @enable_consolidation
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_cache_update_metrics(duration_seconds) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:token_transfers_counter, :on_demand, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

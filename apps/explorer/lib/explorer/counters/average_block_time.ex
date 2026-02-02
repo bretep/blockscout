@@ -58,7 +58,12 @@ defmodule Explorer.Counters.AverageBlockTime do
     refresh_period = Application.get_env(:explorer, __MODULE__)[:period]
     Process.send_after(self(), :refresh_timestamps, refresh_period)
 
-    {:noreply, refresh_timestamps()}
+    start_time = System.monotonic_time(:microsecond)
+    result = refresh_timestamps()
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_refresh_metrics(duration)
+
+    {:noreply, result}
   end
 
   defp refresh_timestamps do
@@ -130,6 +135,22 @@ defmodule Explorer.Counters.AverageBlockTime do
     else
       duration = (last_timestamp - timestamp) / block_numbers_range
       {[duration | durations], block_number, timestamp}
+    end
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_refresh_metrics(duration_seconds) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:average_block_time, :periodic, duration_seconds)
+      rescue
+        _ -> :ok
+      end
     end
   end
 end

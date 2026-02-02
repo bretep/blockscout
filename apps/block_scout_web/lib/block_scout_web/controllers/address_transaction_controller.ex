@@ -195,17 +195,26 @@ defmodule BlockScoutWeb.AddressTransactionController do
       filter_type = Map.get(params, "filter_type")
       filter_value = Map.get(params, "filter_value")
 
-      address_hash
-      |> csv_export_module.export(from_period, to_period, filter_type, filter_value)
-      |> Enum.reduce_while(put_resp_params(conn), fn chunk, conn ->
-        case Conn.chunk(conn, chunk) do
-          {:ok, conn} ->
-            {:cont, conn}
+      start_time = System.monotonic_time(:microsecond)
+      export_type = csv_export_type(csv_export_module)
 
-          {:error, :closed} ->
-            {:halt, conn}
-        end
-      end)
+      {result_conn, row_count} =
+        address_hash
+        |> csv_export_module.export(from_period, to_period, filter_type, filter_value)
+        |> Enum.reduce_while({put_resp_params(conn), 0}, fn chunk, {conn, count} ->
+          case Conn.chunk(conn, chunk) do
+            {:ok, conn} ->
+              {:cont, {conn, count + 1}}
+
+            {:error, :closed} ->
+              {:halt, {conn, count}}
+          end
+        end)
+
+      duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+      record_csv_export_metrics(export_type, duration, row_count)
+
+      result_conn
     else
       :error ->
         unprocessable_entity(conn)
@@ -234,17 +243,26 @@ defmodule BlockScoutWeb.AddressTransactionController do
       filter_type = Map.get(params, "filter_type")
       filter_value = Map.get(params, "filter_value")
 
-      address_hash
-      |> csv_export_module.export(from_period, to_period, filter_type, filter_value)
-      |> Enum.reduce_while(put_resp_params(conn), fn chunk, conn ->
-        case Conn.chunk(conn, chunk) do
-          {:ok, conn} ->
-            {:cont, conn}
+      start_time = System.monotonic_time(:microsecond)
+      export_type = csv_export_type(csv_export_module)
 
-          {:error, :closed} ->
-            {:halt, conn}
-        end
-      end)
+      {result_conn, row_count} =
+        address_hash
+        |> csv_export_module.export(from_period, to_period, filter_type, filter_value)
+        |> Enum.reduce_while({put_resp_params(conn), 0}, fn chunk, {conn, count} ->
+          case Conn.chunk(conn, chunk) do
+            {:ok, conn} ->
+              {:cont, {conn, count + 1}}
+
+            {:error, :closed} ->
+              {:halt, {conn, count}}
+          end
+        end)
+
+      duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+      record_csv_export_metrics(export_type, duration, row_count)
+
+      result_conn
     else
       :error ->
         unprocessable_entity(conn)
@@ -258,6 +276,24 @@ defmodule BlockScoutWeb.AddressTransactionController do
   end
 
   defp items_csv(conn, _, _), do: not_found(conn)
+
+  defp csv_export_type(AddressTransactionCsvExporter), do: :transactions
+  defp csv_export_type(AddressInternalTransactionCsvExporter), do: :internal_transactions
+  defp csv_export_type(AddressTokenTransferCsvExporter), do: :token_transfers
+  defp csv_export_type(AddressLogCsvExporter), do: :logs
+  defp csv_export_type(_), do: :unknown
+
+  defp record_csv_export_metrics(export_type, duration_seconds, row_count) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.csv_export(export_type, duration_seconds, row_count)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 
   def token_transfers_csv(conn, params) do
     items_csv(conn, params, AddressTokenTransferCsvExporter)

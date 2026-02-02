@@ -4,6 +4,7 @@ defmodule EthereumJSONRPC.HTTP do
   """
 
   alias EthereumJSONRPC.{DecodeError, Transport, Utility.EndpointAvailabilityObserver}
+  alias Indexer.Prometheus.Instrumenter
 
   require Logger
 
@@ -26,16 +27,27 @@ defmodule EthereumJSONRPC.HTTP do
     url = url(options, method)
     http_options = Keyword.fetch!(options, :http_options)
 
-    with {:ok, %{body: body, status_code: code}} <- http.json_rpc(url, json, headers(), http_options),
-         {:ok, json} <- decode_json(request: [url: url, body: json], response: [status_code: code, body: body]),
-         {:ok, response} <- handle_response(json, code) do
+    start_time = System.monotonic_time(:microsecond)
+
+    result = with {:ok, %{body: body, status_code: code}} <- http.json_rpc(url, json, headers(), http_options),
+         {:ok, decoded_json} <- decode_json(request: [url: url, body: json], response: [status_code: code, body: body]),
+         {:ok, response} <- handle_response(decoded_json, code) do
+      # Record success metrics
+      duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+      record_metrics(method, duration, :ok, byte_size(body))
       {:ok, response}
     else
       error ->
+        # Record error metrics
+        duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+        record_metrics(method, duration, :error, 0)
+        record_error_metrics(method, error)
         named_arguments = [transport: __MODULE__, transport_options: Keyword.delete(options, :method_to_url)]
         EndpointAvailabilityObserver.inc_error_count(url, named_arguments)
         error
     end
+
+    result
   end
 
   def json_rpc([batch | _] = chunked_batch_request, options) when is_list(batch) do
@@ -69,21 +81,37 @@ defmodule EthereumJSONRPC.HTTP do
     http_options = Keyword.fetch!(options, :http_options)
 
     json = encode_json(batch)
+    batch_size = length(batch)
+    start_time = System.monotonic_time(:microsecond)
+
+    # Record batch metrics
+    record_batch_metrics(method, batch_size)
 
     case http.json_rpc(url, json, headers(), http_options) do
       {:ok, %{status_code: status_code} = response} when status_code in [413, 504] ->
+        duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+        record_metrics(method, duration, :error, 0)
+        record_error_metrics(method, {:http_error, status_code})
         rechunk_json_rpc(chunks, options, response, decoded_response_bodies)
 
       {:ok, %{body: body, status_code: status_code}} ->
+        duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+        record_metrics(method, duration, :ok, byte_size(body))
         with {:ok, decoded_body} <-
                decode_json(request: [url: url, body: json], response: [status_code: status_code, body: body]) do
           chunked_json_rpc(tail, options, [decoded_body | decoded_response_bodies])
         end
 
       {:error, :timeout} ->
+        duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+        record_metrics(method, duration, :error, 0)
+        record_error_metrics(method, :timeout)
         rechunk_json_rpc(chunks, options, :timeout, decoded_response_bodies)
 
       {:error, _} = error ->
+        duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+        record_metrics(method, duration, :error, 0)
+        record_error_metrics(method, error)
         named_arguments = [transport: __MODULE__, transport_options: Keyword.delete(options, :method_to_url)]
         EndpointAvailabilityObserver.inc_error_count(url, named_arguments)
         error
@@ -121,11 +149,13 @@ defmodule EthereumJSONRPC.HTTP do
 
   defp encode_json(data), do: Jason.encode_to_iodata!(data)
 
+  # Use jiffy for JSON decoding - it's a NIF that runs on dirty schedulers
+  # and won't block BEAM schedulers when parsing large trace responses (100MB+)
   defp decode_json(named_arguments) when is_list(named_arguments) do
     response = Keyword.fetch!(named_arguments, :response)
     response_body = Keyword.fetch!(response, :body)
 
-    with {:error, _} <- Jason.decode(response_body) do
+    with {:error, _} <- decode_json_body(response_body) do
       case Keyword.fetch!(response, :status_code) do
         # CloudFlare protected server return HTML errors for 502, so the JSON decode will fail
         502 ->
@@ -149,6 +179,22 @@ defmodule EthereumJSONRPC.HTTP do
 
           {:error, {:bad_response, request_url}}
       end
+    end
+  end
+
+  # Use jiffy for decoding - NIF-based, runs on dirty schedulers
+  # This prevents large JSON responses (trace calls) from blocking BEAM schedulers
+  defp decode_json_body(body) when is_binary(body) do
+    try do
+      # jiffy returns maps with binary keys by default
+      decoded = :jiffy.decode(body, [:return_maps, :use_nil])
+      {:ok, decoded}
+    rescue
+      e in ErlangError ->
+        {:error, e}
+    catch
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -222,4 +268,47 @@ defmodule EthereumJSONRPC.HTTP do
   defp headers do
     Application.get_env(:ethereum_jsonrpc, __MODULE__)[:headers]
   end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_metrics(method, duration_seconds, status, response_size_bytes) do
+    # Only record metrics if Instrumenter is available (avoid crashes during tests)
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.jsonrpc_request(method, duration_seconds, status, response_size_bytes)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
+
+  defp record_error_metrics(method, error) do
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.jsonrpc_error(method, normalize_error(error))
+      rescue
+        _ -> :ok
+      end
+    end
+  end
+
+  defp record_batch_metrics(method, batch_size) do
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.jsonrpc_batch_request(method, batch_size)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
+
+  defp normalize_error({:error, reason}), do: normalize_error(reason)
+  defp normalize_error({:http_error, code}), do: "http_#{code}"
+  defp normalize_error({:bad_gateway, _}), do: "bad_gateway"
+  defp normalize_error({:bad_response, _}), do: "bad_response"
+  defp normalize_error(:timeout), do: "timeout"
+  defp normalize_error(error) when is_atom(error), do: Atom.to_string(error)
+  defp normalize_error(_), do: "unknown"
 end

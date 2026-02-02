@@ -75,6 +75,12 @@ defmodule Indexer.Fetcher.TransactionAction do
     {:stop, :normal, state}
   end
 
+  def handle_info({ref, {:ok, duration, blocks_processed}}, %__MODULE__{task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    record_task_metrics(duration, blocks_processed, :ok)
+    {:noreply, %__MODULE__{state | task: nil}}
+  end
+
   def handle_info({ref, _result}, %__MODULE__{task: %Task{ref: ref}} = state) do
     Process.demonitor(ref, [:flush])
     {:noreply, %__MODULE__{state | task: nil}}
@@ -110,11 +116,13 @@ defmodule Indexer.Fetcher.TransactionAction do
            pid: pid
          } = _state
        ) do
+    start_time = System.monotonic_time(:microsecond)
     logger_metadata = Logger.metadata()
     Logger.metadata(fetcher: :transaction_action)
 
     block_range = Range.new(next_block, first_block, -1)
     block_range_init_length = last_block - first_block + 1
+    blocks_processed_count = Enum.count(block_range)
 
     for block_number <- block_range do
       query =
@@ -190,7 +198,8 @@ defmodule Indexer.Fetcher.TransactionAction do
 
     Logger.reset_metadata(logger_metadata)
 
-    :ok
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    {:ok, duration, blocks_processed_count}
   end
 
   defp init_fetching(opts, first_block, last_block) do
@@ -289,5 +298,22 @@ defmodule Indexer.Fetcher.TransactionAction do
     |> Decimal.to_integer()
   rescue
     _e in Ecto.NoResultsError -> 0
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_task_metrics(duration_seconds, blocks_processed, _result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:transaction_action, duration_seconds)
+        Instrumenter.fetcher_items_processed(:transaction_action, blocks_processed)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

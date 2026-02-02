@@ -16,6 +16,7 @@ defmodule Explorer.Chain.Search do
   import Explorer.Chain, only: [select_repo: 1]
 
   alias Explorer.{Chain, PagingOptions}
+  alias Explorer.Prometheus.Instrumenter
   alias Explorer.Tags.{AddressTag, AddressToTag}
 
   alias Explorer.Chain.{
@@ -31,9 +32,10 @@ defmodule Explorer.Chain.Search do
   """
   @spec joint_search(PagingOptions.t(), integer(), binary(), [Chain.api?()] | []) :: list
   def joint_search(paging_options, offset, raw_string, options \\ []) do
+    start_time = System.monotonic_time(:microsecond)
     string = String.trim(raw_string)
 
-    case prepare_search_term(string) do
+    result = case prepare_search_term(string) do
       {:some, term} ->
         tokens_query = search_token_query(string, term)
         contracts_query = search_contract_query(term)
@@ -99,6 +101,12 @@ defmodule Explorer.Chain.Search do
       _ ->
         []
     end
+
+    # Record search metrics
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_search_metrics(:joint, duration, length(result))
+
+    result
   end
 
   @doc """
@@ -110,9 +118,10 @@ defmodule Explorer.Chain.Search do
   """
   @spec balanced_unpaginated_search(PagingOptions.t(), binary(), [Chain.api?()] | []) :: list
   def balanced_unpaginated_search(paging_options, raw_search_query, options \\ []) do
+    start_time = System.monotonic_time(:microsecond)
     search_query = String.trim(raw_search_query)
 
-    case prepare_search_term(search_query) do
+    result = case prepare_search_term(search_query) do
       {:some, term} ->
         tokens_result =
           search_query
@@ -188,6 +197,12 @@ defmodule Explorer.Chain.Search do
       _ ->
         []
     end
+
+    # Record search metrics
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_search_metrics(:balanced, duration, length(result))
+
+    result
   end
 
   def prepare_search_term(string) do
@@ -523,6 +538,17 @@ defmodule Explorer.Chain.Search do
       |> Map.put(:timestamp, DateTime.from_naive!(result.timestamp, "Etc/UTC"))
     else
       result
+    end
+  end
+
+  # Record search metrics
+  defp record_search_metrics(search_type, duration_seconds, result_count) do
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.search_query(search_type, duration_seconds, result_count)
+      rescue
+        _ -> :ok
+      end
     end
   end
 end

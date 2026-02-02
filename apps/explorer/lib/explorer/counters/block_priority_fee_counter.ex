@@ -56,9 +56,13 @@ defmodule Explorer.Counters.BlockPriorityFeeCounter do
   end
 
   defp update_cache(block_hash) do
+    start_time = System.monotonic_time(:microsecond)
     block_hash_string = get_block_hash_string(block_hash)
     new_data = Chain.block_to_priority_fee_of_1559_txs(block_hash)
     put_into_cache("#{block_hash_string}", new_data)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_cache_update_metrics(duration)
   end
 
   defp fetch_from_cache(key) do
@@ -78,4 +82,20 @@ defmodule Explorer.Counters.BlockPriorityFeeCounter do
   end
 
   defp enable_consolidation?, do: @enable_consolidation
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_cache_update_metrics(duration_seconds) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:block_priority_fee_counter, :on_demand, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

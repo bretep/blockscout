@@ -93,6 +93,8 @@ defmodule Indexer.Fetcher.InternalTransaction do
               tracer: Tracer
             )
   def run(block_numbers, json_rpc_named_arguments) do
+    start_time = System.monotonic_time(:microsecond)
+
     unique_numbers =
       block_numbers
       |> Enum.uniq()
@@ -108,54 +110,59 @@ defmodule Indexer.Fetcher.InternalTransaction do
 
     Logger.debug("fetching internal transactions for blocks")
 
-    json_rpc_named_arguments
-    |> Keyword.fetch!(:variant)
-    |> case do
-      variant
-      when variant in [EthereumJSONRPC.Nethermind, EthereumJSONRPC.Erigon, EthereumJSONRPC.Besu, EthereumJSONRPC.RSK] ->
-        EthereumJSONRPC.fetch_block_internal_transactions(filtered_unique_numbers, json_rpc_named_arguments)
+    result =
+      json_rpc_named_arguments
+      |> Keyword.fetch!(:variant)
+      |> case do
+        variant
+        when variant in [EthereumJSONRPC.Nethermind, EthereumJSONRPC.Erigon, EthereumJSONRPC.Besu, EthereumJSONRPC.RSK] ->
+          EthereumJSONRPC.fetch_block_internal_transactions(filtered_unique_numbers, json_rpc_named_arguments)
 
-      _ ->
-        try do
-          fetch_block_internal_transactions_by_transactions(filtered_unique_numbers, json_rpc_named_arguments)
-        rescue
-          error ->
-            {:error, error, __STACKTRACE__}
-        end
-    end
-    |> case do
-      {:ok, internal_transactions_params} ->
-        safe_import_internal_transaction(internal_transactions_params, filtered_unique_numbers)
+        _ ->
+          try do
+            fetch_block_internal_transactions_by_transactions(filtered_unique_numbers, json_rpc_named_arguments)
+          rescue
+            error ->
+              {:error, error, __STACKTRACE__}
+          end
+      end
+      |> case do
+        {:ok, internal_transactions_params} ->
+          safe_import_internal_transaction(internal_transactions_params, filtered_unique_numbers)
 
-      {:error, reason} ->
-        Logger.error(
-          fn ->
-            ["failed to fetch internal transactions for blocks: ", Exception.format(:error, reason)]
-          end,
-          error_count: filtered_unique_numbers_count
-        )
+        {:error, reason} ->
+          Logger.error(
+            fn ->
+              ["failed to fetch internal transactions for blocks: ", Exception.format(:error, reason)]
+            end,
+            error_count: filtered_unique_numbers_count
+          )
 
-        handle_not_found_transaction(reason)
+          handle_not_found_transaction(reason)
 
-        # re-queue the de-duped entries
-        {:retry, filtered_unique_numbers}
+          # re-queue the de-duped entries
+          {:retry, filtered_unique_numbers}
 
-      {:error, reason, stacktrace} ->
-        Logger.error(
-          fn ->
-            ["failed to fetch internal transactions for blocks: ", Exception.format(:error, reason, stacktrace)]
-          end,
-          error_count: filtered_unique_numbers_count
-        )
+        {:error, reason, stacktrace} ->
+          Logger.error(
+            fn ->
+              ["failed to fetch internal transactions for blocks: ", Exception.format(:error, reason, stacktrace)]
+            end,
+            error_count: filtered_unique_numbers_count
+          )
 
-        handle_not_found_transaction(reason)
+          handle_not_found_transaction(reason)
 
-        # re-queue the de-duped entries
-        {:retry, filtered_unique_numbers}
+          # re-queue the de-duped entries
+          {:retry, filtered_unique_numbers}
 
-      :ignore ->
-        :ok
-    end
+        :ignore ->
+          :ok
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_run_metrics(duration, filtered_unique_numbers_count, result)
+    result
   end
 
   defp drop_genesis(block_numbers, json_rpc_named_arguments) do
@@ -371,5 +378,36 @@ defmodule Indexer.Fetcher.InternalTransaction do
       task_supervisor: Indexer.Fetcher.InternalTransaction.TaskSupervisor,
       metadata: [fetcher: :internal_transaction]
     ]
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_run_metrics(duration_seconds, block_count, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:internal_transaction, duration_seconds)
+
+        case result do
+          :ok ->
+            Instrumenter.fetcher_items_processed(:internal_transaction, block_count)
+
+          {:ok, _} ->
+            Instrumenter.fetcher_items_processed(:internal_transaction, block_count)
+
+          {:retry, blocks} ->
+            Instrumenter.fetcher_retry(:internal_transaction, :fetch_error, length(blocks))
+            Instrumenter.fetcher_error(:internal_transaction, :fetch_error)
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

@@ -38,7 +38,14 @@ defmodule Indexer.Fetcher.PendingBlockOperationsSanitizer do
 
   @impl GenServer
   def handle_info(:update_batch, state) do
-    case update_batch() do
+    start_time = System.monotonic_time(:microsecond)
+
+    result = update_batch()
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_batch_metrics(duration, length(result))
+
+    case result do
       [] ->
         {:stop, :normal, state}
 
@@ -63,5 +70,25 @@ defmodule Indexer.Fetcher.PendingBlockOperationsSanitizer do
     InternalTransaction.async_fetch(block_numbers)
 
     block_numbers
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_batch_metrics(duration_seconds, count) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:pending_block_operations_sanitizer, duration_seconds)
+
+        if count > 0 do
+          Instrumenter.fetcher_items_processed(:pending_block_operations_sanitizer, count)
+        end
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

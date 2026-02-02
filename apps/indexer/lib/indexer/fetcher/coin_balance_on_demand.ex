@@ -76,7 +76,13 @@ defmodule Indexer.Fetcher.CoinBalanceOnDemand do
 
   @impl true
   def handle_cast({:fetch_and_update, block_number, address}, state) do
+    start_time = System.monotonic_time(:microsecond)
+
     result = fetch_and_update(block_number, address, state.json_rpc_named_arguments)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    status = if match?({:ok, _}, result), do: :success, else: :error
+    record_fetch_metrics(:coin_balance, duration, status)
 
     with {:ok, %{addresses: addresses}} <- result do
       Accounts.drop(addresses)
@@ -87,14 +93,26 @@ defmodule Indexer.Fetcher.CoinBalanceOnDemand do
 
   @impl true
   def handle_cast({:fetch_and_import, block_number, address}, state) do
-    fetch_and_import(block_number, address, state.json_rpc_named_arguments)
+    start_time = System.monotonic_time(:microsecond)
+
+    result = fetch_and_import(block_number, address, state.json_rpc_named_arguments)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    status = if result == :ok or match?({:ok, _}, result), do: :success, else: :error
+    record_fetch_metrics(:coin_balance, duration, status)
 
     {:noreply, state}
   end
 
   @impl true
   def handle_cast({:fetch_and_import_daily_balances, block_number, address}, state) do
-    fetch_and_import_daily_balances(block_number, address, state.json_rpc_named_arguments)
+    start_time = System.monotonic_time(:microsecond)
+
+    result = fetch_and_import_daily_balances(block_number, address, state.json_rpc_named_arguments)
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    status = if result == :ok or match?({:ok, _}, result), do: :success, else: :error
+    record_fetch_metrics(:coin_balance_daily, duration, status)
 
     {:noreply, state}
   end
@@ -259,6 +277,18 @@ defmodule Indexer.Fetcher.CoinBalanceOnDemand do
           threshold = Application.get_env(:indexer, __MODULE__)[:threshold]
           block_number - div(threshold, average_block_time)
         end
+    end
+  end
+
+  defp record_fetch_metrics(fetch_type, duration_seconds, status) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.on_demand_fetch(fetch_type, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
     end
   end
 end

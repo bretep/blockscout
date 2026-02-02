@@ -13,9 +13,15 @@ defmodule Explorer.ThirdPartyIntegrations.Auth0 do
     get_m2m_jwt_inner(Redix.command(:redix, ["GET", cookie_key(@redis_key)]))
   end
 
-  def get_m2m_jwt_inner({:ok, token}) when not is_nil(token), do: token
+  def get_m2m_jwt_inner({:ok, token}) when not is_nil(token) do
+    record_cache_metrics(:hit)
+    token
+  end
 
   def get_m2m_jwt_inner(_) do
+    record_cache_metrics(:miss)
+    start_time = System.monotonic_time(:microsecond)
+
     config = Application.get_env(:ueberauth, Ueberauth.Strategy.Auth0.OAuth)
 
     body = %{
@@ -27,19 +33,25 @@ defmodule Explorer.ThirdPartyIntegrations.Auth0 do
 
     headers = [{"Content-type", "application/json"}]
 
-    case HTTPoison.post("https://#{config[:domain]}/oauth/token", Jason.encode!(body), headers, []) do
-      {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
-        case Jason.decode!(body) do
-          %{"access_token" => token, "expires_in" => ttl} ->
-            cache_token(token, ttl - 1)
+    result =
+      case HTTPoison.post("https://#{config[:domain]}/oauth/token", Jason.encode!(body), headers, []) do
+        {:ok, %HTTPoison.Response{status_code: 200, body: body}} ->
+          case Jason.decode!(body) do
+            %{"access_token" => token, "expires_in" => ttl} ->
+              cache_token(token, ttl - 1)
 
-          _ ->
-            nil
-        end
+            _ ->
+              nil
+          end
 
-      _ ->
-        nil
-    end
+        _ ->
+          nil
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    status = if is_nil(result), do: :error, else: :success
+    record_api_metrics(duration, status)
+    result
   end
 
   @doc """
@@ -59,5 +71,33 @@ defmodule Explorer.ThirdPartyIntegrations.Auth0 do
   defp cache_token(token, ttl) do
     Redix.command(:redix, ["SET", cookie_key(@redis_key), token, "EX", ttl])
     token
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_api_metrics(duration_seconds, status) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.external_api_request(:auth0, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
+
+  defp record_cache_metrics(result) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.external_api_cache(:auth0, result)
+      rescue
+        _ -> :ok
+      end
+    end
   end
 end

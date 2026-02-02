@@ -123,7 +123,8 @@ defmodule Explorer.Application do
         configure(Explorer.Chain.Fetcher.FetchValidatorInfoOnDemand),
         configure(Explorer.TokenInstanceOwnerAddressMigration.Supervisor),
         sc_microservice_configure(Explorer.Chain.Fetcher.LookUpSmartContractSourcesOnDemand),
-        configure(Explorer.Chain.Cache.RootstockLockedBTC)
+        configure(Explorer.Chain.Cache.RootstockLockedBTC),
+        nats_publisher_child()
       ]
       |> List.flatten()
 
@@ -161,6 +162,19 @@ defmodule Explorer.Application do
   defp sc_microservice_configure(process) do
     if Application.get_env(:explorer, Explorer.SmartContract.RustVerifierInterfaceBehaviour)[:eth_bytecode_db?] do
       process
+    else
+      []
+    end
+  end
+
+  # Start NATS publisher only when NATS_URL is configured and we're running as indexer
+  defp nats_publisher_child do
+    nats_url = Application.get_env(:explorer, :nats_url)
+    indexer_supervisor_config = Application.get_env(:indexer, Indexer.Supervisor, [])
+    indexer_enabled = Keyword.get(indexer_supervisor_config, :enabled, false)
+
+    if nats_url && indexer_enabled do
+      {Explorer.Nats.Publisher, nats_url: nats_url}
     else
       []
     end

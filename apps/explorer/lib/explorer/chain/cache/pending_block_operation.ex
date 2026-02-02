@@ -47,8 +47,13 @@ defmodule Explorer.Chain.Cache.PendingBlockOperation do
     # so a new one needs to be launched
     {:ok, task} =
       Task.start(fn ->
+        start_time = System.monotonic_time(:microsecond)
+
         try do
           result = Repo.aggregate(PendingBlockOperation, :count, timeout: :infinity)
+
+          duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+          record_cache_update_metrics(duration)
 
           set_count(result)
         rescue
@@ -70,4 +75,20 @@ defmodule Explorer.Chain.Cache.PendingBlockOperation do
   defp async_task_on_deletion({:delete, _, :count}), do: get_async_task()
 
   defp async_task_on_deletion(_data), do: nil
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_cache_update_metrics(duration_seconds) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.cache_consolidation(:pending_block_operation, :on_demand, duration_seconds)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

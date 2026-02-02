@@ -26,10 +26,14 @@ defmodule Explorer.ThirdPartyIntegrations.AirTable do
         "records" => [%{"fields" => PublicTagsRequest.to_map(new_request)}]
       }
 
+      start_time = System.monotonic_time(:microsecond)
       request = HTTPoison.post(url, Jason.encode!(body), headers, [])
+      duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
 
       case request do
         {:ok, %Response{body: body, status_code: 200}} ->
+          record_airtable_metrics(duration, :success)
+
           request_id = Enum.at(Jason.decode!(body)["records"], 0)["fields"]["request_id"]
 
           new_request
@@ -39,6 +43,7 @@ defmodule Explorer.ThirdPartyIntegrations.AirTable do
           input
 
         error ->
+          record_airtable_metrics(duration, :error)
           Logger.error(fn -> ["Error while submitting AirTable entry", inspect(error)] end)
 
           {:error,
@@ -53,4 +58,20 @@ defmodule Explorer.ThirdPartyIntegrations.AirTable do
   end
 
   def submit(error), do: error
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_airtable_metrics(duration_seconds, status) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.external_api_request(:airtable, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

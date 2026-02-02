@@ -116,50 +116,55 @@ defmodule Indexer.Fetcher.PendingTransaction do
 
   defp task(%__MODULE__{json_rpc_named_arguments: json_rpc_named_arguments} = _state) do
     Logger.metadata(fetcher: :pending_transaction)
+    start_time = System.monotonic_time(:microsecond)
 
-    case fetch_pending_transactions(json_rpc_named_arguments) do
-      {:ok, transactions_params} ->
-        new_last_fetched_at = NaiveDateTime.utc_now()
+    result =
+      case fetch_pending_transactions(json_rpc_named_arguments) do
+        {:ok, transactions_params} ->
+          new_last_fetched_at = NaiveDateTime.utc_now()
+          tx_count = length(transactions_params)
 
-        transactions_params
-        |> Stream.map(&Map.put(&1, :earliest_processing_start, new_last_fetched_at))
-        |> Stream.chunk_every(@chunk_size)
-        |> Enum.each(&import_chunk/1)
+          transactions_params
+          |> Stream.map(&Map.put(&1, :earliest_processing_start, new_last_fetched_at))
+          |> Stream.chunk_every(@chunk_size)
+          |> Enum.each(&import_chunk/1)
 
-        {:ok, new_last_fetched_at}
+          {:ok, new_last_fetched_at, tx_count}
 
-      :ignore ->
-        :ok
+        :ignore ->
+          {:ignore, 0}
 
-      {:error, :timeout} ->
-        Logger.error("timeout")
+        {:error, :timeout} ->
+          Logger.error("timeout")
+          {:error, :timeout}
 
-        :ok
+        {:error, :etimedout} ->
+          Logger.error("timeout")
+          {:error, :timeout}
 
-      {:error, :etimedout} ->
-        Logger.error("timeout")
+        {:error, :econnrefused} ->
+          Logger.error("connection_refused")
+          {:error, :connection_refused}
 
-        :ok
+        {:error, {:bad_gateway, _}} ->
+          Logger.error("bad_gateway")
+          {:error, :bad_gateway}
 
-      {:error, :econnrefused} ->
-        Logger.error("connection_refused")
+        {:error, :closed} ->
+          Logger.error("closed")
+          {:error, :closed}
 
-        :ok
+        {:error, reason} ->
+          Logger.error(inspect(reason))
+          {:error, :other}
+      end
 
-      {:error, {:bad_gateway, _}} ->
-        Logger.error("bad_gateway")
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_task_metrics(duration, result)
 
-        :ok
-
-      {:error, :closed} ->
-        Logger.error("closed")
-
-        :ok
-
-      {:error, reason} ->
-        Logger.error(inspect(reason))
-
-        :ok
+    case result do
+      {:ok, last_fetched_at, _count} -> {:ok, last_fetched_at}
+      _ -> :ok
     end
   end
 
@@ -188,6 +193,36 @@ defmodule Indexer.Fetcher.PendingTransaction do
       {:error, step, failed_value, _changes_so_far} ->
         Logger.error(fn -> ["Failed to import: ", inspect(failed_value)] end, step: step)
         :ok
+    end
+  end
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_task_metrics(duration_seconds, result) do
+    alias Indexer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        Instrumenter.fetcher_run_duration(:pending_transaction, duration_seconds)
+
+        case result do
+          {:ok, _last_fetched_at, tx_count} when tx_count > 0 ->
+            Instrumenter.fetcher_items_processed(:pending_transaction, tx_count)
+
+          {:ignore, _} ->
+            :ok
+
+          {:error, error_type} ->
+            Instrumenter.fetcher_error(:pending_transaction, error_type)
+
+          _ ->
+            :ok
+        end
+      rescue
+        _ -> :ok
+      end
     end
   end
 end

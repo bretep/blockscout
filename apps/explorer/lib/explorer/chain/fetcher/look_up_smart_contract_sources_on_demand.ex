@@ -34,22 +34,29 @@ defmodule Explorer.Chain.Fetcher.LookUpSmartContractSourcesOnDemand do
   end
 
   defp fetch_sources(address, only_full?) do
+    start_time = System.monotonic_time(:microsecond)
     Publisher.broadcast(%{eth_bytecode_db_lookup_started: [address.hash]}, :on_demand)
 
     creation_tx_input = contract_creation_input(address.hash)
 
-    with {:ok, %{"sourceType" => type, "matchType" => match_type} = source} <-
-           %{}
-           |> prepare_bytecode_for_microservice(creation_tx_input, Data.to_string(address.contract_code))
-           |> EthBytecodeDBInterface.search_contract(address.hash),
-         :ok <- check_match_type(match_type, only_full?),
-         {:ok, _} <- process_contract_source(type, source, address.hash) do
-      Publisher.broadcast(%{smart_contract_was_verified: [address.hash]}, :on_demand)
-    else
-      _ ->
-        Publisher.broadcast(%{smart_contract_was_not_verified: [address.hash]}, :on_demand)
-        false
-    end
+    result =
+      with {:ok, %{"sourceType" => type, "matchType" => match_type} = source} <-
+             %{}
+             |> prepare_bytecode_for_microservice(creation_tx_input, Data.to_string(address.contract_code))
+             |> EthBytecodeDBInterface.search_contract(address.hash),
+           :ok <- check_match_type(match_type, only_full?),
+           {:ok, _} <- process_contract_source(type, source, address.hash) do
+        Publisher.broadcast(%{smart_contract_was_verified: [address.hash]}, :on_demand)
+        :ok
+      else
+        _ ->
+          Publisher.broadcast(%{smart_contract_was_not_verified: [address.hash]}, :on_demand)
+          false
+      end
+
+    duration = (System.monotonic_time(:microsecond) - start_time) / 1_000_000
+    record_fetch_metrics(duration, result)
+    result
   end
 
   def start_link(_) do
@@ -167,4 +174,21 @@ defmodule Explorer.Chain.Fetcher.LookUpSmartContractSourcesOnDemand do
   end
 
   defp to_lowercase_string(hash), do: hash |> to_string() |> String.downcase()
+
+  # =============================================================================
+  # Metrics Helper Functions
+  # =============================================================================
+
+  defp record_fetch_metrics(duration_seconds, result) do
+    alias Explorer.Prometheus.Instrumenter
+
+    if Code.ensure_loaded?(Instrumenter) do
+      try do
+        status = if result == :ok, do: :success, else: :error
+        Instrumenter.on_demand_fetch(:smart_contract_sources, duration_seconds, status)
+      rescue
+        _ -> :ok
+      end
+    end
+  end
 end

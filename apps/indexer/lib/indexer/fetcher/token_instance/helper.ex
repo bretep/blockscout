@@ -2,6 +2,8 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
   @moduledoc """
     Common functions for Indexer.Fetcher.TokenInstance fetchers
   """
+  require Logger
+
   alias Explorer.Chain
   alias Explorer.SmartContract.Reader
   alias Indexer.Fetcher.TokenInstance.MetadataRetriever
@@ -53,10 +55,25 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
 
   @spec batch_fetch_instances([%{}]) :: list()
   def batch_fetch_instances(token_instances) do
+    # Log batch size for debugging
+    Logger.debug("TokenInstance.Helper: batch_fetch_instances called with #{length(token_instances)} instances")
+
     token_instances =
-      Enum.map(token_instances, fn
+      token_instances
+      |> Enum.map(fn
         %{contract_address_hash: hash, token_id: token_id} -> {hash, token_id}
         {_, _} = tuple -> tuple
+      end)
+      # Filter out any entries with nil values to prevent insert failures
+      |> Enum.filter(fn
+        {nil, token_id} ->
+          Logger.error("[TOKEN_INSTANCE_NIL_BUG] Input has nil contract_address_hash, token_id: #{inspect(token_id)}")
+          false
+        {contract_address_hash, nil} ->
+          Logger.error("[TOKEN_INSTANCE_NIL_BUG] Input has nil token_id, contract_address_hash: #{inspect(contract_address_hash)}")
+          false
+        _ ->
+          true
       end)
 
     splitted =
@@ -79,34 +96,77 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
         Map.put_new(acc, address_hash_string, Chain.get_token_type(contract_address_hash))
       end)
 
-    contract_results =
-      (other
-       |> Enum.map(fn {contract_address_hash, token_id} ->
-         token_id = prepare_token_id(token_id)
-         contract_address_hash_string = to_string(contract_address_hash)
+    # Build RPC requests and get results
+    rpc_requests =
+      other
+      |> Enum.map(fn {contract_address_hash, token_id} ->
+        token_id = prepare_token_id(token_id)
+        contract_address_hash_string = to_string(contract_address_hash)
+        prepare_request(token_types_map[contract_address_hash_string], contract_address_hash_string, token_id)
+      end)
 
-         prepare_request(token_types_map[contract_address_hash_string], contract_address_hash_string, token_id)
-       end)
-       |> Reader.query_contracts(@erc_721_1155_abi, [], false)
-       |> Enum.zip_reduce(other, [], fn result, {contract_address_hash, token_id}, acc ->
-         token_id = prepare_token_id(token_id)
+    rpc_results = Reader.query_contracts(rpc_requests, @erc_721_1155_abi, [], false)
 
-         [
-           {result, normalize_token_id(token_types_map[to_string(contract_address_hash)], token_id),
-            contract_address_hash, token_id}
-           | acc
-         ]
-       end)
-       |> Enum.reverse()) ++
-        cryptokitties
+    # Log if RPC results count differs from input count
+    if length(rpc_results) != length(other) do
+      Logger.error(
+        "[TOKEN_INSTANCE_NIL_BUG] RPC result count mismatch! other=#{length(other)}, rpc_results=#{length(rpc_results)}"
+      )
+    end
 
-    contract_results
-    |> Enum.map(fn {result, normalized_token_id, _contract_address_hash, _token_id} ->
-      Task.async(fn -> MetadataRetriever.fetch_json(result, normalized_token_id) end)
+    # Build contract_results by zipping RPC results with original data
+    contract_results_from_rpc =
+      rpc_results
+      |> Enum.zip_reduce(other, [], fn result, {contract_address_hash, token_id}, acc ->
+        token_id = prepare_token_id(token_id)
+
+        [
+          {result, normalize_token_id(token_types_map[to_string(contract_address_hash)], token_id),
+           contract_address_hash, token_id}
+          | acc
+        ]
+      end)
+      |> Enum.reverse()
+
+    contract_results = contract_results_from_rpc ++ cryptokitties
+
+    # Log contract_results to verify data integrity
+    Enum.each(contract_results, fn {_result, _normalized_token_id, contract_address_hash, token_id} ->
+      if is_nil(contract_address_hash) or is_nil(token_id) do
+        Logger.error(
+          "[TOKEN_INSTANCE_NIL_BUG] nil in contract_results! contract_address_hash=#{inspect(contract_address_hash)}, token_id=#{inspect(token_id)}"
+        )
+      end
     end)
-    |> Task.yield_many(:infinity)
-    |> Enum.zip(contract_results)
+
+    # Spawn tasks for metadata fetching
+    tasks =
+      contract_results
+      |> Enum.map(fn {result, normalized_token_id, _contract_address_hash, _token_id} ->
+        Task.async(fn -> MetadataRetriever.fetch_json(result, normalized_token_id) end)
+      end)
+
+    task_results = Task.yield_many(tasks, :infinity)
+
+    # Log if task results count differs from contract_results count
+    if length(task_results) != length(contract_results) do
+      Logger.error(
+        "[TOKEN_INSTANCE_NIL_BUG] Task result count mismatch! contract_results=#{length(contract_results)}, task_results=#{length(task_results)}"
+      )
+    end
+
+    # Zip task results with contract_results and build insert params
+    zipped = Enum.zip(task_results, contract_results)
+
+    zipped
     |> Enum.map(fn {{_task, res}, {_result, _normalized_token_id, contract_address_hash, token_id}} ->
+      # Log if we're about to use nil values
+      if is_nil(contract_address_hash) or is_nil(token_id) do
+        Logger.error(
+          "[TOKEN_INSTANCE_NIL_BUG] nil in zipped result! contract_address_hash=#{inspect(contract_address_hash)}, token_id=#{inspect(token_id)}, res=#{inspect(res)}"
+        )
+      end
+
       case res do
         {:ok, result} ->
           result_to_insert_params(result, contract_address_hash, token_id)
@@ -118,6 +178,24 @@ defmodule Indexer.Fetcher.TokenInstance.Helper do
             token_id
           )
       end
+    end)
+    # Filter out any results with nil PKs before upserting
+    |> Enum.split_with(fn params ->
+      case params do
+        %{token_id: nil} -> false
+        %{token_contract_address_hash: nil} -> false
+        _ -> true
+      end
+    end)
+    |> then(fn {valid, invalid} ->
+      # Log a clear signal when nils are filtered - this is what to grep for
+      if invalid != [] do
+        Logger.error(
+          "[TOKEN_INSTANCE_NIL_BUG] Filtered #{length(invalid)} records with nil PKs. " <>
+          "Check logs above for details. Sample: #{inspect(Enum.take(invalid, 2))}"
+        )
+      end
+      valid
     end)
     |> Chain.upsert_token_instances_list()
   end

@@ -1,0 +1,48 @@
+# NATS Server with JetStream for BlockScout
+#
+# Add this to your docker-compose setup or merge into existing compose file.
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker/nats/docker-compose.nats.yml up -d
+#
+# Environment variables for BlockScout services:
+#   Indexer: NATS_URL=nats://nats:4222
+#   API:     NATS_URL=nats://nats:4222
+
+version: '3.8'
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: blockscout-nats
+    restart: unless-stopped
+    ports:
+      - "4222:4222"   # Client connections
+      - "8222:8222"   # HTTP monitoring
+    volumes:
+      - ./nats.conf:/etc/nats/nats.conf:ro
+      - nats-data:/data/jetstream
+    command: ["-c", "/etc/nats/nats.conf"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - blockscout
+
+  # Example blockscout service dependency (add to your existing service)
+  # blockscout:
+  #   depends_on:
+  #     nats:
+  #       condition: service_healthy
+  #   environment:
+  #     - NATS_URL=nats://nats:4222
+
+volumes:
+  nats-data:
+    driver: local
+
+networks:
+  blockscout:
+    external: true

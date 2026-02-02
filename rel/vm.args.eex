@@ -1,0 +1,41 @@
+## This file provide the arguments provided to the VM at startup
+## You can find a full list of flags and their behaviours at
+## http://erlang.org/doc/man/erl.html
+
+## Name of the node
+-name <%= @release.name %>@127.0.0.1
+
+## Cookie for distributed erlang
+-setcookie <%= @release.options[:cookie] %>
+
+## Heartbeat management; auto-restarts VM if it dies or becomes unresponsive
+## (Disabled by default..use with caution!)
+-heart
+
+## Enable kernel poll for better I/O performance (epoll on Linux, kqueue on BSD/macOS)
++K true
+
+## Dirty I/O schedulers - handles file and network I/O operations
+## Default is 10, increase for heavy I/O workloads (database, HTTP, NATS)
++SDio 32
+
+## Increase number of concurrent ports/sockets
+## Needed for: database connection pools, HTTP connections, NATS connections
++Q 65536
+
+## Disable busy waiting to reduce CPU usage in containers
+## Schedulers won't spin-wait when idle, reducing CPU consumption
++sbwt none
++sbwtdcpu none
++sbwtdio none
+
+## Increase process limit (default 262144)
+## Blockscout spawns many processes for concurrent fetching
++P 1000000
+
+## Increase atom limit (default 1048576)
+## Large codebases with many modules can exhaust atoms
++t 2000000
+
+# Enable SMP automatically based on availability
+-smp auto
